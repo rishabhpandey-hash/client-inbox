@@ -1,25 +1,30 @@
 <!doctype html>
 <!--
-  Campaign Reply Inbox — static client dashboard.
+  Campaign Reply Inbox — static client dashboard with email login.
 
   Machine-readable integration notes (for AI agents and scripts):
-  - Data source (JSON API), same data as rendered on this page:
-      GET  {API_BASE}/api/inbox?key={ACCESS_KEY}
-           -> { client:{name}, campaigns:[{id,name,status,stats,last_synced_at}],
+  - Authentication: Supabase Auth email OTP. Sign in with the supabase-js SDK
+    against window.INBOX_SUPABASE_URL using window.INBOX_SUPABASE_ANON_KEY:
+      signInWithOtp({ email }) then click the emailed link or
+      verifyOtp({ email, token, type: 'email' }).
+    Access is whitelist-based: only emails registered by the agency get data.
+  - Data source (JSON API). All calls require the header
+    "Authorization: Bearer <supabase_access_token>":
+      GET  {API_BASE}/api/inbox
+           -> { client:{name,can_reply,user_email},
+                campaigns:[{id,name,status,stats,last_synced_at}],
                 conversations:[{id,campaign_id,lead_email,lead_name,lead_category,
                                 subject,last_message_at,last_message_preview,
                                 message_count,reply_count}] }
-      GET  {API_BASE}/api/thread?key={ACCESS_KEY}&id={CONVERSATION_ID}
+      GET  {API_BASE}/api/thread?id={CONVERSATION_ID}
            -> { conversation:{...}, messages:[{direction:SENT|REPLY,from_email,
                 to_email,subject,body_html,preview,sent_at,seq_number}] }
-      POST {API_BASE}/api/reply?key={ACCESS_KEY}
+      POST {API_BASE}/api/reply
            body: { "conversation_id": "...", "body": "plain text reply" }
            -> { ok:true } — sends a real email into the thread from the same
-           mailbox that ran the campaign. Only enabled when the inbox payload
-           has client.can_reply=true. Line breaks are preserved; a signature
-           is appended automatically.
-    API_BASE is the value of window.INBOX_API_BASE; ACCESS_KEY comes from the
-    page URL's ?key= parameter.
+           mailbox that ran the campaign. Requires can_reply=true for the
+           signed-in user. Every send is audit-logged with the sender's email.
+    API_BASE is the value of window.INBOX_API_BASE.
   - The current page state is mirrored as JSON in <script id="inbox-data">.
   - DOM conventions: conversation rows are [role="listitem"] elements carrying
     data-conversation-id, data-lead-email, data-lead-name, data-category,
@@ -37,7 +42,7 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f3f4f6; color: #111827; }
-  #app { display: flex; flex-direction: column; height: 100%; }
+  #app { display: none; flex-direction: column; height: 100%; }
   header { background: #fff; border-bottom: 1px solid #e5e7eb; padding: 12px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
   .logo { width: 38px; height: 38px; border-radius: 10px; background: #4f46e5; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 17px; flex: none; }
   .brand h1 { font-size: 16px; font-weight: 650; }
@@ -48,6 +53,7 @@
   .controls input { width: 210px; }
   .controls button { border: 1px solid #d1d5db; background: #fff; border-radius: 8px; padding: 7px 12px; font-size: 13px; cursor: pointer; color: #374151; }
   .controls button:hover { background: #f9fafb; }
+  .whoami { font-size: 11.5px; color: #9ca3af; }
   #statsBar { background: #fff; border-bottom: 1px solid #e5e7eb; padding: 12px 20px; display: none; }
   #campaignContext { font-size: 12px; color: #6b7280; margin-bottom: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   #campaignContext .cname { font-weight: 650; color: #111827; font-size: 12.5px; }
@@ -118,6 +124,23 @@
   .composer .status { font-size: 12px; margin-left: auto; }
   .composer .status.ok { color: #15803d; font-weight: 600; }
   .composer .status.err { color: #b91c1c; }
+  #gate { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; padding: 32px 30px; width: 100%; max-width: 400px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .card .logo { margin: 0 auto 14px; width: 46px; height: 46px; font-size: 20px; border-radius: 12px; }
+  .card h1 { font-size: 18px; font-weight: 700; text-align: center; }
+  .card .sub { font-size: 13px; color: #6b7280; text-align: center; margin-top: 4px; margin-bottom: 20px; }
+  .card label { display: block; font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 6px; }
+  .card input { width: 100%; border: 1px solid #d1d5db; border-radius: 10px; padding: 10px 12px; font-size: 14px; color: #111827; }
+  .card input:focus { outline: 2px solid #c7d2fe; border-color: #a5b4fc; }
+  .card .primary { width: 100%; margin-top: 12px; background: #4f46e5; border: 0; color: #fff; border-radius: 10px; padding: 11px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .card .primary:hover { background: #4338ca; }
+  .card .primary:disabled { opacity: .5; cursor: default; }
+  .card .msg { border: 0; font-size: 12.5px; margin-top: 12px; text-align: center; line-height: 1.5; }
+  .card .msg.info { color: #4338ca; }
+  .card .msg.err { color: #b91c1c; }
+  .card .alt { margin-top: 16px; font-size: 12px; color: #9ca3af; text-align: center; }
+  .card .alt a { color: #4f46e5; cursor: pointer; text-decoration: none; font-weight: 600; }
+  #codeRow { display: none; margin-top: 14px; }
   @media (max-width: 760px) {
     aside { width: 100%; }
     main.show-thread aside { display: none; }
@@ -129,6 +152,29 @@
 </style>
 </head>
 <body>
+<div id="gate">
+  <div class="card" id="loginCard">
+    <div class="logo">✉</div>
+    <h1>Campaign Reply Inbox</h1>
+    <div class="sub">Sign in with your email to view your campaigns.</div>
+    <div id="loginForm">
+      <label for="loginEmail">Work email</label>
+      <input id="loginEmail" type="email" placeholder="you@company.com" autocomplete="email">
+      <button class="primary" id="sendLink">Email me a login link</button>
+      <div id="codeRow">
+        <label for="loginCode">6-digit code (if your email shows one)</label>
+        <input id="loginCode" inputmode="numeric" placeholder="123456">
+        <button class="primary" id="verifyCode">Verify code</button>
+      </div>
+      <div class="msg" id="loginMsg"></div>
+      <div class="alt" id="altRow" style="display:none"><a id="showCode">Have a code instead?</a></div>
+    </div>
+    <div id="deniedBox" style="display:none">
+      <div class="msg err" id="deniedMsg"></div>
+      <button class="primary" id="deniedLogout" style="margin-top:16px">Use a different email</button>
+    </div>
+  </div>
+</div>
 <div id="app">
   <header>
     <div class="brand">
@@ -139,6 +185,8 @@
       <select id="campaignFilter" style="display:none" aria-label="Filter by campaign"></select>
       <input id="search" placeholder="Search name, email, subject&hellip;" aria-label="Search conversations">
       <button id="refresh">Refresh</button>
+      <span class="whoami" id="whoami"></span>
+      <button id="logout">Log out</button>
     </div>
   </header>
   <div id="statsBar" role="region" aria-label="Campaign statistics">
@@ -151,375 +199,474 @@
   </main>
 </div>
 <script type="application/json" id="inbox-data">{}</script>
-<script>
-(function () {
-  var BASE = 'https://mgnjlymtjmcoskqinhid.supabase.co/functions/v1/inbox';
-  window.INBOX_API_BASE = BASE;
-  var KEY = new URLSearchParams(location.search).get('key') || '';
-  var POSITIVE = ['interested', 'meeting request', 'information request'];
-  var state = { data: null, selected: null, campaign: 'all', q: '' };
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-  function api(path) {
-    var sep = path.indexOf('?') >= 0 ? '&' : '?';
-    return fetch(BASE + path + sep + 'key=' + encodeURIComponent(KEY)).then(function (r) {
-      if (!r.ok) { var e = new Error('http ' + r.status); e.status = r.status; throw e; }
-      return r.json();
-    });
+var SUPABASE_URL = 'https://mgnjlymtjmcoskqinhid.supabase.co';
+var ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1nbmpseW10am1jb3NrcWluaGlkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyMzMxOTMsImV4cCI6MjEwMDgwOTE5M30.bFMe8wltqHkB7esG_eAYKhU20n2sjPSPp6cEmFoCrco';
+var BASE = SUPABASE_URL + '/functions/v1/inbox';
+window.INBOX_API_BASE = BASE;
+window.INBOX_SUPABASE_URL = SUPABASE_URL;
+window.INBOX_SUPABASE_ANON_KEY = ANON_KEY;
+
+var sb = createClient(SUPABASE_URL, ANON_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit' }
+});
+
+var POSITIVE = ['interested', 'meeting request', 'information request'];
+var state = { data: null, selected: null, campaign: 'all', q: '' };
+var appStarted = false;
+
+async function api(path, opts) {
+  var s = await sb.auth.getSession();
+  var token = s.data.session ? s.data.session.access_token : '';
+  opts = opts || {};
+  opts.headers = Object.assign({ Authorization: 'Bearer ' + token }, opts.headers || {});
+  var r = await fetch(BASE + path, opts);
+  if (!r.ok) {
+    var e = new Error('http ' + r.status);
+    e.status = r.status;
+    try { e.body = await r.json(); } catch (x) {}
+    throw e;
   }
+  return r.json();
+}
 
-  function el(tag, cls, text) {
-    var n = document.createElement(tag);
-    if (cls) n.className = cls;
-    if (text != null) n.textContent = text;
-    return n;
+function el(tag, cls, text) {
+  var n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+function initials(name, email) {
+  var s = (name || email || '?').trim();
+  var parts = s.split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return s.slice(0, 2).toUpperCase();
+}
+
+function catCls(c) {
+  var s = (c || '').toLowerCase();
+  if (!s) return null;
+  if (s.indexOf('interested') === 0 || s.indexOf('meeting') >= 0 || s.indexOf('positive') >= 0) return 'green';
+  if (s.indexOf('information') >= 0) return 'blue';
+  if (s.indexOf('out of office') >= 0) return 'amber';
+  if (s.indexOf('not interested') >= 0 || s.indexOf('do not') >= 0) return 'red';
+  if (s.indexOf('wrong') >= 0) return 'purple';
+  return '';
+}
+
+function isPositive(c) {
+  var s = (c || '').toLowerCase();
+  if (!s) return false;
+  if (s.indexOf('not interested') >= 0) return false;
+  for (var i = 0; i < POSITIVE.length; i++) if (s.indexOf(POSITIVE[i]) >= 0) return true;
+  return false;
+}
+
+function fmtShort(t) {
+  if (!t) return '';
+  var d = new Date(t), now = new Date();
+  if (d.toDateString() === now.toDateString()) {
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   }
-
-  function initials(name, email) {
-    var s = (name || email || '?').trim();
-    var parts = s.split(/\s+/);
-    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-    return s.slice(0, 2).toUpperCase();
+  if (d.getFullYear() === now.getFullYear()) {
+    return d.toLocaleDateString([], { day: 'numeric', month: 'short' });
   }
+  return d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
+}
 
-  function catCls(c) {
-    var s = (c || '').toLowerCase();
-    if (!s) return null;
-    if (s.indexOf('interested') === 0 || s.indexOf('meeting') >= 0 || s.indexOf('positive') >= 0) return 'green';
-    if (s.indexOf('information') >= 0) return 'blue';
-    if (s.indexOf('out of office') >= 0) return 'amber';
-    if (s.indexOf('not interested') >= 0 || s.indexOf('do not') >= 0) return 'red';
-    if (s.indexOf('wrong') >= 0) return 'purple';
-    return '';
-  }
+function fmtLong(t) {
+  if (!t) return '';
+  return new Date(t).toLocaleString([], { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
 
-  function isPositive(c) {
-    var s = (c || '').toLowerCase();
-    if (!s) return false;
-    if (s.indexOf('not interested') >= 0) return false;
-    for (var i = 0; i < POSITIVE.length; i++) if (s.indexOf(POSITIVE[i]) >= 0) return true;
-    return false;
-  }
+function num(x) { return (x == null || isNaN(x)) ? 0 : Number(x); }
+function fmtNum(x) { return num(x).toLocaleString(); }
 
-  function fmtShort(t) {
-    if (!t) return '';
-    var d = new Date(t), now = new Date();
-    if (d.toDateString() === now.toDateString()) {
-      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+function campaignById(id) {
+  var cs = state.data ? state.data.campaigns : [];
+  for (var i = 0; i < cs.length; i++) if (String(cs[i].id) === String(id)) return cs[i];
+  return null;
+}
+
+function selectedCampaigns() {
+  var cs = state.data ? state.data.campaigns : [];
+  if (state.campaign === 'all') return cs;
+  var c = campaignById(state.campaign);
+  return c ? [c] : [];
+}
+
+function statTile(key, value, label, sub, cls) {
+  var t = el('div', 'stat' + (cls ? ' ' + cls : ''));
+  t.setAttribute('data-stat', key);
+  t.setAttribute('data-value', String(value));
+  t.appendChild(el('div', 'v', typeof value === 'number' ? fmtNum(value) : String(value)));
+  t.appendChild(el('div', 'l', label));
+  if (sub) t.appendChild(el('div', 's', sub));
+  return t;
+}
+
+function renderStats() {
+  var bar = document.getElementById('statsBar');
+  var ctx = document.getElementById('campaignContext');
+  var wrap = document.getElementById('stats');
+  var cs = selectedCampaigns();
+  if (!cs.length) { bar.style.display = 'none'; return; }
+  bar.style.display = 'block';
+  ctx.innerHTML = '';
+  wrap.innerHTML = '';
+
+  if (cs.length === 1) {
+    var c = cs[0];
+    ctx.setAttribute('data-campaign-id', String(c.id));
+    ctx.setAttribute('data-campaign-name', c.name || '');
+    ctx.setAttribute('data-campaign-status', c.status || '');
+    ctx.appendChild(el('span', null, 'Campaign:'));
+    ctx.appendChild(el('span', 'cname', c.name || ('#' + c.id)));
+    ctx.appendChild(el('span', 'statuschip' + ((c.status || '') === 'ACTIVE' ? '' : ' inactive'), c.status || 'UNKNOWN'));
+    if (c.last_synced_at) {
+      ctx.appendChild(el('span', 'dot', '·'));
+      ctx.appendChild(el('span', null, 'Data updated ' + fmtLong(c.last_synced_at)));
     }
-    if (d.getFullYear() === now.getFullYear()) {
-      return d.toLocaleDateString([], { day: 'numeric', month: 'short' });
-    }
-    return d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
+  } else {
+    ctx.removeAttribute('data-campaign-id');
+    ctx.appendChild(el('span', 'cname', 'All campaigns (' + cs.length + ')'));
   }
 
-  function fmtLong(t) {
-    if (!t) return '';
-    return new Date(t).toLocaleString([], { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
-  }
-
-  function num(x) { return (x == null || isNaN(x)) ? 0 : Number(x); }
-  function fmtNum(x) { return num(x).toLocaleString(); }
-
-  function campaignById(id) {
-    var cs = state.data ? state.data.campaigns : [];
-    for (var i = 0; i < cs.length; i++) if (String(cs[i].id) === String(id)) return cs[i];
-    return null;
-  }
-
-  function selectedCampaigns() {
-    var cs = state.data ? state.data.campaigns : [];
-    if (state.campaign === 'all') return cs;
-    var c = campaignById(state.campaign);
-    return c ? [c] : [];
-  }
-
-  function statTile(key, value, label, sub, cls) {
-    var t = el('div', 'stat' + (cls ? ' ' + cls : ''));
-    t.setAttribute('data-stat', key);
-    t.setAttribute('data-value', String(value));
-    t.appendChild(el('div', 'v', typeof value === 'number' ? fmtNum(value) : String(value)));
-    t.appendChild(el('div', 'l', label));
-    if (sub) t.appendChild(el('div', 's', sub));
-    return t;
-  }
-
-  function renderStats() {
-    var bar = document.getElementById('statsBar');
-    var ctx = document.getElementById('campaignContext');
-    var wrap = document.getElementById('stats');
-    var cs = selectedCampaigns();
-    if (!cs.length) { bar.style.display = 'none'; return; }
-    bar.style.display = 'block';
-    ctx.innerHTML = '';
-    wrap.innerHTML = '';
-
-    if (cs.length === 1) {
-      var c = cs[0];
-      ctx.setAttribute('data-campaign-id', String(c.id));
-      ctx.setAttribute('data-campaign-name', c.name || '');
-      ctx.setAttribute('data-campaign-status', c.status || '');
-      ctx.appendChild(el('span', null, 'Campaign:'));
-      ctx.appendChild(el('span', 'cname', c.name || ('#' + c.id)));
-      ctx.appendChild(el('span', 'statuschip' + ((c.status || '') === 'ACTIVE' ? '' : ' inactive'), c.status || 'UNKNOWN'));
-      if (c.last_synced_at) {
-        ctx.appendChild(el('span', 'dot', '·'));
-        ctx.appendChild(el('span', null, 'Data updated ' + fmtLong(c.last_synced_at)));
-      }
-    } else {
-      ctx.removeAttribute('data-campaign-id');
-      ctx.appendChild(el('span', 'cname', 'All campaigns (' + cs.length + ')'));
-    }
-
-    var agg = { total_leads: 0, unique_sent_count: 0, sent_count: 0, reply_count: 0, open: 0, bounce_count: 0 };
-    cs.forEach(function (c) {
-      var s = c.stats || {};
-      agg.total_leads += num(s.total_leads);
-      agg.unique_sent_count += num(s.unique_sent_count);
-      agg.sent_count += num(s.sent_count);
-      agg.reply_count += num(s.reply_count);
-      agg.open += num(s.unique_open_count);
-      agg.bounce_count += num(s.bounce_count);
-    });
-
-    var ids = {};
-    cs.forEach(function (c) { ids[String(c.id)] = true; });
-    var convs = (state.data ? state.data.conversations : []).filter(function (c) { return ids[String(c.campaign_id)]; });
-    var positive = convs.filter(function (c) { return isPositive(c.lead_category); }).length;
-
-    var replyRate = agg.unique_sent_count ? (agg.reply_count / agg.unique_sent_count * 100) : 0;
-    var positiveRate = agg.reply_count ? (positive / agg.reply_count * 100) : 0;
-
-    wrap.appendChild(statTile('total_leads', agg.total_leads, 'Leads in campaign'));
-    wrap.appendChild(statTile('emails_sent', agg.sent_count, 'Emails sent', fmtNum(agg.unique_sent_count) + ' people contacted'));
-    if (agg.open > 0) wrap.appendChild(statTile('unique_opens', agg.open, 'People opened'));
-    wrap.appendChild(statTile('replies', agg.reply_count, 'Replies', replyRate.toFixed(1) + '% of people contacted', 'hl'));
-    wrap.appendChild(statTile('positive_replies', positive, 'Positive replies', positiveRate.toFixed(0) + '% of replies · Interested / Meeting / Info', 'good'));
-    if (agg.bounce_count > 0) wrap.appendChild(statTile('bounces', agg.bounce_count, 'Bounced'));
-  }
-
-  function renderList() {
-    var list = document.getElementById('list');
-    list.innerHTML = '';
-    var convs = (state.data ? state.data.conversations : []).filter(function (c) {
-      if (state.campaign !== 'all' && String(c.campaign_id) !== state.campaign) return false;
-      if (state.q) {
-        var camp = campaignById(c.campaign_id);
-        var hay = ((c.lead_name || '') + ' ' + c.lead_email + ' ' + (c.subject || '') + ' ' + (c.last_message_preview || '') + ' ' + (camp ? camp.name : '')).toLowerCase();
-        if (hay.indexOf(state.q) < 0) return false;
-      }
-      return true;
-    });
-    document.getElementById('count').textContent = convs.length + ' conversation' + (convs.length === 1 ? '' : 's') + ' with replies';
-    if (!convs.length) {
-      list.appendChild(el('div', 'spinner', 'No replies yet.'));
-      return;
-    }
-    convs.forEach(function (c) {
-      var camp = campaignById(c.campaign_id);
-      var item = el('div', 'item' + (state.selected === c.id ? ' active' : ''));
-      item.setAttribute('role', 'listitem');
-      item.setAttribute('data-conversation-id', c.id);
-      item.setAttribute('data-lead-email', c.lead_email);
-      item.setAttribute('data-lead-name', c.lead_name || '');
-      item.setAttribute('data-category', c.lead_category || '');
-      item.setAttribute('data-campaign-id', String(c.campaign_id));
-      item.setAttribute('data-campaign-name', camp ? (camp.name || '') : '');
-      item.setAttribute('data-last-message-at', c.last_message_at || '');
-      item.setAttribute('data-reply-count', String(c.reply_count));
-      item.appendChild(el('div', 'avatar', initials(c.lead_name, c.lead_email)));
-      var meta = el('div', 'meta');
-      var r1 = el('div', 'row1');
-      r1.appendChild(el('div', 'name', c.lead_name || c.lead_email));
-      r1.appendChild(el('div', 'time', fmtShort(c.last_message_at)));
-      meta.appendChild(r1);
-      if (c.subject) meta.appendChild(el('div', 'subj', c.subject));
-      if (c.last_message_preview) meta.appendChild(el('div', 'prev', c.last_message_preview));
-      var badges = el('div', 'badges');
-      if (c.lead_category) badges.appendChild(el('span', 'badge ' + (catCls(c.lead_category) || ''), c.lead_category));
-      badges.appendChild(el('span', 'badge', c.reply_count + (c.reply_count === 1 ? ' reply' : ' replies')));
-      if (camp && camp.name) {
-        var cb = el('span', 'badge campaign', camp.name);
-        cb.title = 'Campaign: ' + camp.name;
-        badges.appendChild(cb);
-      }
-      meta.appendChild(badges);
-      item.appendChild(meta);
-      item.onclick = function () { openThread(c.id); };
-      list.appendChild(item);
-    });
-  }
-
-  function bodyFrame(html) {
-    var f = document.createElement('iframe');
-    f.setAttribute('sandbox', 'allow-same-origin allow-popups');
-    f.srcdoc = '<html><head><base target="_blank"><style>body{margin:14px 16px;font:13.5px/1.55 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1f2937;word-break:break-word}img{max-width:100%;height:auto}a{color:#4f46e5}blockquote{border-left:3px solid #e5e7eb;margin:8px 0;padding-left:12px;color:#6b7280}</style></head><body>' + (html || '') + '</body></html>';
-    f.style.height = '80px';
-    f.onload = function () {
-      try { f.style.height = Math.min(1400, f.contentDocument.body.scrollHeight + 34) + 'px'; } catch (e) { f.style.height = '400px'; }
-    };
-    return f;
-  }
-
-  function renderThread(d) {
-    var wrap = document.getElementById('threadWrap');
-    wrap.innerHTML = '';
-    var head = el('div', 'thread-head');
-    head.setAttribute('data-conversation-id', d.conversation.id);
-    head.setAttribute('data-lead-email', d.conversation.lead_email);
-    head.setAttribute('data-campaign-id', String(d.conversation.campaign_id));
-    head.setAttribute('data-campaign-name', d.conversation.campaign_name || '');
-    var top = el('div', 'top');
-    var back = el('button', 'back');
-    back.innerHTML = '&larr; Inbox';
-    back.onclick = function () { document.getElementById('main').classList.remove('show-thread'); };
-    top.appendChild(back);
-    top.appendChild(el('h2', null, d.conversation.lead_name || d.conversation.lead_email));
-    top.appendChild(el('span', 'email', d.conversation.lead_email));
-    if (d.conversation.lead_category) top.appendChild(el('span', 'badge ' + (catCls(d.conversation.lead_category) || ''), d.conversation.lead_category));
-    head.appendChild(top);
-    if (d.conversation.subject) head.appendChild(el('div', 'subject', 'Subject: ' + d.conversation.subject));
-    var cl = el('div', 'campaign-line');
-    cl.appendChild(document.createTextNode('Campaign: '));
-    var cb = el('b', null, d.conversation.campaign_name || ('#' + d.conversation.campaign_id));
-    cl.appendChild(cb);
-    head.appendChild(cl);
-    wrap.appendChild(head);
-    var msgs = el('div', 'msgs');
-    d.messages.forEach(function (m) {
-      var card = el('div', 'msg ' + (m.direction === 'REPLY' ? 'reply' : ''));
-      card.setAttribute('data-direction', m.direction);
-      card.setAttribute('data-from', m.from_email || '');
-      card.setAttribute('data-to', m.to_email || '');
-      card.setAttribute('data-sent-at', m.sent_at || '');
-      var mh = el('div', 'msg-head');
-      mh.appendChild(el('span', 'dir ' + (m.direction === 'REPLY' ? 'reply' : 'sent'), m.direction === 'REPLY' ? 'REPLY' : 'SENT'));
-      mh.appendChild(el('span', 'from', (m.from_email || '') + ' → ' + (m.to_email || '')));
-      mh.appendChild(el('span', 'when', fmtLong(m.sent_at)));
-      card.appendChild(mh);
-      if (m.direction === 'REPLY') {
-        card.appendChild(bodyFrame(m.body_html));
-      } else {
-        var cb2 = el('div', 'collapsed-body');
-        cb2.appendChild(document.createTextNode((m.preview || '').slice(0, 140) + '… '));
-        var toggle = el('span', null, 'Show email');
-        cb2.appendChild(toggle);
-        cb2.onclick = function () { card.replaceChild(bodyFrame(m.body_html), cb2); };
-        card.appendChild(cb2);
-      }
-      msgs.appendChild(card);
-    });
-    wrap.appendChild(msgs);
-    if (state.data && state.data.client && state.data.client.can_reply) {
-      var comp = el('div', 'composer');
-      var ta = document.createElement('textarea');
-      ta.placeholder = 'Write a reply to ' + (d.conversation.lead_name || d.conversation.lead_email) + '…';
-      ta.setAttribute('aria-label', 'Reply message');
-      var row = el('div', 'row');
-      var btn = el('button', null, 'Send reply');
-      var hint = el('span', 'hint', 'Sends from the same mailbox that emailed this lead, in the same thread.');
-      var status = el('span', 'status', '');
-      row.appendChild(btn);
-      row.appendChild(hint);
-      row.appendChild(status);
-      comp.appendChild(ta);
-      comp.appendChild(row);
-      btn.onclick = function () {
-        var text = ta.value.trim();
-        if (!text) { status.className = 'status err'; status.textContent = 'Write a message first.'; return; }
-        btn.disabled = true; ta.disabled = true;
-        status.className = 'status'; status.textContent = 'Sending…';
-        fetch(BASE + '/api/reply?key=' + encodeURIComponent(KEY), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conversation_id: d.conversation.id, body: text })
-        }).then(function (r) {
-          return r.json().then(function (j) { return { ok: r.ok, j: j }; });
-        }).then(function (res) {
-          if (res.ok && res.j && res.j.ok) {
-            status.className = 'status ok';
-            status.textContent = 'Sent ✓';
-            ta.value = '';
-            setTimeout(function () { openThread(d.conversation.id); }, 1200);
-          } else {
-            btn.disabled = false; ta.disabled = false;
-            status.className = 'status err';
-            status.textContent = 'Failed: ' + ((res.j && res.j.error) || 'unknown error');
-          }
-        }).catch(function () {
-          btn.disabled = false; ta.disabled = false;
-          status.className = 'status err';
-          status.textContent = 'Network error — reply may not have been sent.';
-        });
-      };
-      wrap.appendChild(comp);
-    }
-    msgs.scrollTop = msgs.scrollHeight;
-  }
-
-  function openThread(id) {
-    state.selected = id;
-    renderList();
-    document.getElementById('main').classList.add('show-thread');
-    var wrap = document.getElementById('threadWrap');
-    wrap.innerHTML = '';
-    wrap.appendChild(el('div', 'spinner', 'Loading thread…'));
-    api('/api/thread?id=' + encodeURIComponent(id)).then(renderThread).catch(function () {
-      wrap.innerHTML = '';
-      wrap.appendChild(el('div', 'empty', 'Could not load this thread.'));
-    });
-  }
-
-  function showInvalid() {
-    document.getElementById('clientName').textContent = 'Access denied';
-    document.getElementById('logo').textContent = '!';
-    var list = document.getElementById('list');
-    list.innerHTML = '';
-    list.appendChild(el('div', 'spinner', 'This link is invalid or has been revoked. Please contact your agency for a new link.'));
-  }
-
-  function load(silent) {
-    return api('/api/inbox').then(function (d) {
-      state.data = d;
-      try { document.getElementById('inbox-data').textContent = JSON.stringify(d); } catch (e) {}
-      document.body.setAttribute('data-client', d.client.name || '');
-      document.getElementById('clientName').textContent = d.client.name;
-      document.getElementById('logo').textContent = (d.client.name || '?')[0].toUpperCase();
-      document.title = d.client.name + ' — Reply Inbox';
-      var sel = document.getElementById('campaignFilter');
-      if (d.campaigns.length > 1) {
-        sel.style.display = '';
-        sel.innerHTML = '';
-        var all = document.createElement('option');
-        all.value = 'all'; all.textContent = 'All campaigns';
-        sel.appendChild(all);
-        d.campaigns.forEach(function (c) {
-          var o = document.createElement('option');
-          o.value = String(c.id); o.textContent = c.name;
-          sel.appendChild(o);
-        });
-        sel.value = state.campaign;
-      }
-      renderStats();
-      renderList();
-    }).catch(function (e) {
-      if (!silent) showInvalid();
-    });
-  }
-
-  document.getElementById('search').addEventListener('input', function (e) {
-    state.q = e.target.value.trim().toLowerCase();
-    renderList();
+  var agg = { total_leads: 0, unique_sent_count: 0, sent_count: 0, reply_count: 0, open: 0, bounce_count: 0 };
+  cs.forEach(function (c) {
+    var s = c.stats || {};
+    agg.total_leads += num(s.total_leads);
+    agg.unique_sent_count += num(s.unique_sent_count);
+    agg.sent_count += num(s.sent_count);
+    agg.reply_count += num(s.reply_count);
+    agg.open += num(s.unique_open_count);
+    agg.bounce_count += num(s.bounce_count);
   });
-  document.getElementById('campaignFilter').addEventListener('change', function (e) {
-    state.campaign = e.target.value;
+
+  var ids = {};
+  cs.forEach(function (c) { ids[String(c.id)] = true; });
+  var convs = (state.data ? state.data.conversations : []).filter(function (c) { return ids[String(c.campaign_id)]; });
+  var positive = convs.filter(function (c) { return isPositive(c.lead_category); }).length;
+
+  var replyRate = agg.unique_sent_count ? (agg.reply_count / agg.unique_sent_count * 100) : 0;
+  var positiveRate = agg.reply_count ? (positive / agg.reply_count * 100) : 0;
+
+  wrap.appendChild(statTile('total_leads', agg.total_leads, 'Leads in campaign'));
+  wrap.appendChild(statTile('emails_sent', agg.sent_count, 'Emails sent', fmtNum(agg.unique_sent_count) + ' people contacted'));
+  if (agg.open > 0) wrap.appendChild(statTile('unique_opens', agg.open, 'People opened'));
+  wrap.appendChild(statTile('replies', agg.reply_count, 'Replies', replyRate.toFixed(1) + '% of people contacted', 'hl'));
+  wrap.appendChild(statTile('positive_replies', positive, 'Positive replies', positiveRate.toFixed(0) + '% of replies · Interested / Meeting / Info', 'good'));
+  if (agg.bounce_count > 0) wrap.appendChild(statTile('bounces', agg.bounce_count, 'Bounced'));
+}
+
+function renderList() {
+  var list = document.getElementById('list');
+  list.innerHTML = '';
+  var convs = (state.data ? state.data.conversations : []).filter(function (c) {
+    if (state.campaign !== 'all' && String(c.campaign_id) !== state.campaign) return false;
+    if (state.q) {
+      var camp = campaignById(c.campaign_id);
+      var hay = ((c.lead_name || '') + ' ' + c.lead_email + ' ' + (c.subject || '') + ' ' + (c.last_message_preview || '') + ' ' + (camp ? camp.name : '')).toLowerCase();
+      if (hay.indexOf(state.q) < 0) return false;
+    }
+    return true;
+  });
+  document.getElementById('count').textContent = convs.length + ' conversation' + (convs.length === 1 ? '' : 's') + ' with replies';
+  if (!convs.length) {
+    list.appendChild(el('div', 'spinner', 'No replies yet.'));
+    return;
+  }
+  convs.forEach(function (c) {
+    var camp = campaignById(c.campaign_id);
+    var item = el('div', 'item' + (state.selected === c.id ? ' active' : ''));
+    item.setAttribute('role', 'listitem');
+    item.setAttribute('data-conversation-id', c.id);
+    item.setAttribute('data-lead-email', c.lead_email);
+    item.setAttribute('data-lead-name', c.lead_name || '');
+    item.setAttribute('data-category', c.lead_category || '');
+    item.setAttribute('data-campaign-id', String(c.campaign_id));
+    item.setAttribute('data-campaign-name', camp ? (camp.name || '') : '');
+    item.setAttribute('data-last-message-at', c.last_message_at || '');
+    item.setAttribute('data-reply-count', String(c.reply_count));
+    item.appendChild(el('div', 'avatar', initials(c.lead_name, c.lead_email)));
+    var meta = el('div', 'meta');
+    var r1 = el('div', 'row1');
+    r1.appendChild(el('div', 'name', c.lead_name || c.lead_email));
+    r1.appendChild(el('div', 'time', fmtShort(c.last_message_at)));
+    meta.appendChild(r1);
+    if (c.subject) meta.appendChild(el('div', 'subj', c.subject));
+    if (c.last_message_preview) meta.appendChild(el('div', 'prev', c.last_message_preview));
+    var badges = el('div', 'badges');
+    if (c.lead_category) badges.appendChild(el('span', 'badge ' + (catCls(c.lead_category) || ''), c.lead_category));
+    badges.appendChild(el('span', 'badge', c.reply_count + (c.reply_count === 1 ? ' reply' : ' replies')));
+    if (camp && camp.name) {
+      var cb = el('span', 'badge campaign', camp.name);
+      cb.title = 'Campaign: ' + camp.name;
+      badges.appendChild(cb);
+    }
+    meta.appendChild(badges);
+    item.appendChild(meta);
+    item.onclick = function () { openThread(c.id); };
+    list.appendChild(item);
+  });
+}
+
+function bodyFrame(html) {
+  var f = document.createElement('iframe');
+  f.setAttribute('sandbox', 'allow-same-origin allow-popups');
+  f.srcdoc = '<html><head><base target="_blank"><style>body{margin:14px 16px;font:13.5px/1.55 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1f2937;word-break:break-word}img{max-width:100%;height:auto}a{color:#4f46e5}blockquote{border-left:3px solid #e5e7eb;margin:8px 0;padding-left:12px;color:#6b7280}</style></head><body>' + (html || '') + '</body></html>';
+  f.style.height = '80px';
+  f.onload = function () {
+    try { f.style.height = Math.min(1400, f.contentDocument.body.scrollHeight + 34) + 'px'; } catch (e) { f.style.height = '400px'; }
+  };
+  return f;
+}
+
+function renderThread(d) {
+  var wrap = document.getElementById('threadWrap');
+  wrap.innerHTML = '';
+  var head = el('div', 'thread-head');
+  head.setAttribute('data-conversation-id', d.conversation.id);
+  head.setAttribute('data-lead-email', d.conversation.lead_email);
+  head.setAttribute('data-campaign-id', String(d.conversation.campaign_id));
+  head.setAttribute('data-campaign-name', d.conversation.campaign_name || '');
+  var top = el('div', 'top');
+  var back = el('button', 'back');
+  back.innerHTML = '&larr; Inbox';
+  back.onclick = function () { document.getElementById('main').classList.remove('show-thread'); };
+  top.appendChild(back);
+  top.appendChild(el('h2', null, d.conversation.lead_name || d.conversation.lead_email));
+  top.appendChild(el('span', 'email', d.conversation.lead_email));
+  if (d.conversation.lead_category) top.appendChild(el('span', 'badge ' + (catCls(d.conversation.lead_category) || ''), d.conversation.lead_category));
+  head.appendChild(top);
+  if (d.conversation.subject) head.appendChild(el('div', 'subject', 'Subject: ' + d.conversation.subject));
+  var cl = el('div', 'campaign-line');
+  cl.appendChild(document.createTextNode('Campaign: '));
+  cl.appendChild(el('b', null, d.conversation.campaign_name || ('#' + d.conversation.campaign_id)));
+  head.appendChild(cl);
+  wrap.appendChild(head);
+  var msgs = el('div', 'msgs');
+  d.messages.forEach(function (m) {
+    var card = el('div', 'msg ' + (m.direction === 'REPLY' ? 'reply' : ''));
+    card.setAttribute('data-direction', m.direction);
+    card.setAttribute('data-from', m.from_email || '');
+    card.setAttribute('data-to', m.to_email || '');
+    card.setAttribute('data-sent-at', m.sent_at || '');
+    var mh = el('div', 'msg-head');
+    mh.appendChild(el('span', 'dir ' + (m.direction === 'REPLY' ? 'reply' : 'sent'), m.direction === 'REPLY' ? 'REPLY' : 'SENT'));
+    mh.appendChild(el('span', 'from', (m.from_email || '') + ' → ' + (m.to_email || '')));
+    mh.appendChild(el('span', 'when', fmtLong(m.sent_at)));
+    card.appendChild(mh);
+    if (m.direction === 'REPLY') {
+      card.appendChild(bodyFrame(m.body_html));
+    } else {
+      var cb2 = el('div', 'collapsed-body');
+      cb2.appendChild(document.createTextNode((m.preview || '').slice(0, 140) + '… '));
+      cb2.appendChild(el('span', null, 'Show email'));
+      cb2.onclick = function () { card.replaceChild(bodyFrame(m.body_html), cb2); };
+      card.appendChild(cb2);
+    }
+    msgs.appendChild(card);
+  });
+  wrap.appendChild(msgs);
+  if (state.data && state.data.client && state.data.client.can_reply) {
+    var comp = el('div', 'composer');
+    var ta = document.createElement('textarea');
+    ta.placeholder = 'Write a reply to ' + (d.conversation.lead_name || d.conversation.lead_email) + '…';
+    ta.setAttribute('aria-label', 'Reply message');
+    var row = el('div', 'row');
+    var btn = el('button', null, 'Send reply');
+    var hint = el('span', 'hint', 'Sends from the same mailbox that emailed this lead, in the same thread.');
+    var status = el('span', 'status', '');
+    row.appendChild(btn);
+    row.appendChild(hint);
+    row.appendChild(status);
+    comp.appendChild(ta);
+    comp.appendChild(row);
+    btn.onclick = function () {
+      var text = ta.value.trim();
+      if (!text) { status.className = 'status err'; status.textContent = 'Write a message first.'; return; }
+      btn.disabled = true; ta.disabled = true;
+      status.className = 'status'; status.textContent = 'Sending…';
+      api('/api/reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversation_id: d.conversation.id, body: text })
+      }).then(function (j) {
+        if (j && j.ok) {
+          status.className = 'status ok';
+          status.textContent = 'Sent ✓';
+          ta.value = '';
+          setTimeout(function () { openThread(d.conversation.id); }, 1200);
+        } else {
+          throw new Error('unexpected');
+        }
+      }).catch(function (e) {
+        btn.disabled = false; ta.disabled = false;
+        status.className = 'status err';
+        status.textContent = 'Failed: ' + ((e.body && e.body.error) || e.message || 'unknown error');
+      });
+    };
+    wrap.appendChild(comp);
+  }
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function openThread(id) {
+  state.selected = id;
+  renderList();
+  document.getElementById('main').classList.add('show-thread');
+  var wrap = document.getElementById('threadWrap');
+  wrap.innerHTML = '';
+  wrap.appendChild(el('div', 'spinner', 'Loading thread…'));
+  api('/api/thread?id=' + encodeURIComponent(id)).then(renderThread).catch(function () {
+    wrap.innerHTML = '';
+    wrap.appendChild(el('div', 'empty', 'Could not load this thread.'));
+  });
+}
+
+function showGate() {
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('gate').style.display = 'flex';
+  document.getElementById('loginForm').style.display = 'block';
+  document.getElementById('deniedBox').style.display = 'none';
+}
+
+function showDenied(email) {
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('gate').style.display = 'flex';
+  document.getElementById('loginForm').style.display = 'none';
+  var box = document.getElementById('deniedBox');
+  box.style.display = 'block';
+  document.getElementById('deniedMsg').textContent =
+    (email || 'This account') + ' does not have access to any campaign inbox. Ask your agency to add your email, then sign in again.';
+}
+
+function showApp() {
+  document.getElementById('gate').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+}
+
+function load(silent) {
+  return api('/api/inbox').then(function (d) {
+    state.data = d;
+    try { document.getElementById('inbox-data').textContent = JSON.stringify(d); } catch (e) {}
+    document.body.setAttribute('data-client', d.client.name || '');
+    document.getElementById('clientName').textContent = d.client.name;
+    document.getElementById('logo').textContent = (d.client.name || '?')[0].toUpperCase();
+    document.getElementById('whoami').textContent = d.client.user_email || '';
+    document.title = d.client.name + ' — Reply Inbox';
+    var sel = document.getElementById('campaignFilter');
+    if (d.campaigns.length > 1) {
+      sel.style.display = '';
+      sel.innerHTML = '';
+      var all = document.createElement('option');
+      all.value = 'all'; all.textContent = 'All campaigns';
+      sel.appendChild(all);
+      d.campaigns.forEach(function (c) {
+        var o = document.createElement('option');
+        o.value = String(c.id); o.textContent = c.name;
+        sel.appendChild(o);
+      });
+      sel.value = state.campaign;
+    }
+    showApp();
     renderStats();
     renderList();
+  }).catch(function (e) {
+    if (e.status === 403) {
+      sb.auth.getUser().then(function (u) {
+        showDenied(u.data.user ? u.data.user.email : null);
+      });
+    } else if (e.status === 401) {
+      showGate();
+    } else if (!silent) {
+      showApp();
+      var list = document.getElementById('list');
+      list.innerHTML = '';
+      list.appendChild(el('div', 'spinner', 'Could not load data. Check your connection and hit Refresh.'));
+    }
   });
-  document.getElementById('refresh').addEventListener('click', function () { load(); });
-  setInterval(function () { load(true); }, 120000);
+}
 
-  if (!KEY) { showInvalid(); } else { load(); }
-})();
+async function startApp() {
+  if (appStarted) return;
+  appStarted = true;
+  await load();
+  setInterval(function () {
+    if (document.getElementById('app').style.display !== 'none') load(true);
+  }, 120000);
+}
+
+document.getElementById('sendLink').addEventListener('click', async function () {
+  var email = document.getElementById('loginEmail').value.trim().toLowerCase();
+  var msg = document.getElementById('loginMsg');
+  if (!email || email.indexOf('@') < 0) { msg.className = 'msg err'; msg.textContent = 'Enter a valid email address.'; return; }
+  var btn = this;
+  btn.disabled = true;
+  msg.className = 'msg info'; msg.textContent = 'Sending…';
+  var res = await sb.auth.signInWithOtp({ email: email });
+  btn.disabled = false;
+  if (res.error) {
+    msg.className = 'msg err';
+    msg.textContent = res.error.message.indexOf('rate') >= 0
+      ? 'Too many attempts — please wait a few minutes and try again.'
+      : 'Could not send the email: ' + res.error.message;
+    return;
+  }
+  msg.className = 'msg info';
+  msg.textContent = 'Check your inbox (' + email + ') and click the login link. It may take a minute — check spam too.';
+  document.getElementById('altRow').style.display = 'block';
+});
+
+document.getElementById('showCode').addEventListener('click', function () {
+  document.getElementById('codeRow').style.display = 'block';
+  document.getElementById('altRow').style.display = 'none';
+});
+
+document.getElementById('verifyCode').addEventListener('click', async function () {
+  var email = document.getElementById('loginEmail').value.trim().toLowerCase();
+  var code = document.getElementById('loginCode').value.trim();
+  var msg = document.getElementById('loginMsg');
+  if (!email || !code) { msg.className = 'msg err'; msg.textContent = 'Enter your email and the code.'; return; }
+  msg.className = 'msg info'; msg.textContent = 'Verifying…';
+  var res = await sb.auth.verifyOtp({ email: email, token: code, type: 'email' });
+  if (res.error) { msg.className = 'msg err'; msg.textContent = 'Invalid or expired code.'; return; }
+  startApp();
+});
+
+document.getElementById('logout').addEventListener('click', async function () {
+  await sb.auth.signOut();
+  appStarted = false;
+  state.data = null;
+  showGate();
+});
+
+document.getElementById('deniedLogout').addEventListener('click', async function () {
+  await sb.auth.signOut();
+  showGate();
+});
+
+document.getElementById('search').addEventListener('input', function (e) {
+  state.q = e.target.value.trim().toLowerCase();
+  renderList();
+});
+document.getElementById('campaignFilter').addEventListener('change', function (e) {
+  state.campaign = e.target.value;
+  renderStats();
+  renderList();
+});
+document.getElementById('refresh').addEventListener('click', function () { load(); });
+
+sb.auth.onAuthStateChange(function (event, session) {
+  if (session) startApp();
+});
+
+var boot = await sb.auth.getSession();
+if (boot.data.session) { startApp(); } else { showGate(); }
 </script>
 </body>
 </html>
