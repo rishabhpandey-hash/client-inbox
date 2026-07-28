@@ -12,6 +12,12 @@
       GET  {API_BASE}/api/thread?key={ACCESS_KEY}&id={CONVERSATION_ID}
            -> { conversation:{...}, messages:[{direction:SENT|REPLY,from_email,
                 to_email,subject,body_html,preview,sent_at,seq_number}] }
+      POST {API_BASE}/api/reply?key={ACCESS_KEY}
+           body: { "conversation_id": "...", "body": "plain text reply" }
+           -> { ok:true } — sends a real email into the thread from the same
+           mailbox that ran the campaign. Only enabled when the inbox payload
+           has client.can_reply=true. Line breaks are preserved; a signature
+           is appended automatically.
     API_BASE is the value of window.INBOX_API_BASE; ACCESS_KEY comes from the
     page URL's ?key= parameter.
   - The current page state is mirrored as JSON in <script id="inbox-data">.
@@ -101,6 +107,17 @@
   .collapsed-body { padding: 12px 16px; font-size: 12.5px; color: #6b7280; cursor: pointer; }
   .collapsed-body span { color: #4f46e5; font-weight: 600; }
   .spinner { padding: 30px; text-align: center; color: #9ca3af; font-size: 13px; }
+  .composer { background: #fff; border-top: 1px solid #e5e7eb; padding: 12px 22px; }
+  .composer textarea { width: 100%; max-width: 860px; min-height: 74px; border: 1px solid #d1d5db; border-radius: 10px; padding: 10px 12px; font: 13.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #111827; resize: vertical; display: block; }
+  .composer textarea:focus { outline: 2px solid #c7d2fe; border-color: #a5b4fc; }
+  .composer .row { display: flex; align-items: center; gap: 10px; margin-top: 8px; max-width: 860px; flex-wrap: wrap; }
+  .composer .row button { background: #4f46e5; border: 0; color: #fff; border-radius: 8px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .composer .row button:hover { background: #4338ca; }
+  .composer .row button:disabled { opacity: .5; cursor: default; }
+  .composer .hint { font-size: 11.5px; color: #9ca3af; }
+  .composer .status { font-size: 12px; margin-left: auto; }
+  .composer .status.ok { color: #15803d; font-weight: 600; }
+  .composer .status.err { color: #b91c1c; }
   @media (max-width: 760px) {
     aside { width: 100%; }
     main.show-thread aside { display: none; }
@@ -392,6 +409,50 @@
       msgs.appendChild(card);
     });
     wrap.appendChild(msgs);
+    if (state.data && state.data.client && state.data.client.can_reply) {
+      var comp = el('div', 'composer');
+      var ta = document.createElement('textarea');
+      ta.placeholder = 'Write a reply to ' + (d.conversation.lead_name || d.conversation.lead_email) + '…';
+      ta.setAttribute('aria-label', 'Reply message');
+      var row = el('div', 'row');
+      var btn = el('button', null, 'Send reply');
+      var hint = el('span', 'hint', 'Sends from the same mailbox that emailed this lead, in the same thread.');
+      var status = el('span', 'status', '');
+      row.appendChild(btn);
+      row.appendChild(hint);
+      row.appendChild(status);
+      comp.appendChild(ta);
+      comp.appendChild(row);
+      btn.onclick = function () {
+        var text = ta.value.trim();
+        if (!text) { status.className = 'status err'; status.textContent = 'Write a message first.'; return; }
+        btn.disabled = true; ta.disabled = true;
+        status.className = 'status'; status.textContent = 'Sending…';
+        fetch(BASE + '/api/reply?key=' + encodeURIComponent(KEY), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conversation_id: d.conversation.id, body: text })
+        }).then(function (r) {
+          return r.json().then(function (j) { return { ok: r.ok, j: j }; });
+        }).then(function (res) {
+          if (res.ok && res.j && res.j.ok) {
+            status.className = 'status ok';
+            status.textContent = 'Sent ✓';
+            ta.value = '';
+            setTimeout(function () { openThread(d.conversation.id); }, 1200);
+          } else {
+            btn.disabled = false; ta.disabled = false;
+            status.className = 'status err';
+            status.textContent = 'Failed: ' + ((res.j && res.j.error) || 'unknown error');
+          }
+        }).catch(function () {
+          btn.disabled = false; ta.disabled = false;
+          status.className = 'status err';
+          status.textContent = 'Network error — reply may not have been sent.';
+        });
+      };
+      wrap.appendChild(comp);
+    }
     msgs.scrollTop = msgs.scrollHeight;
   }
 
