@@ -1,4 +1,26 @@
 <!doctype html>
+<!--
+  Campaign Reply Inbox — static client dashboard.
+
+  Machine-readable integration notes (for AI agents and scripts):
+  - Data source (JSON API), same data as rendered on this page:
+      GET  {API_BASE}/api/inbox?key={ACCESS_KEY}
+           -> { client:{name}, campaigns:[{id,name,status,stats,last_synced_at}],
+                conversations:[{id,campaign_id,lead_email,lead_name,lead_category,
+                                subject,last_message_at,last_message_preview,
+                                message_count,reply_count}] }
+      GET  {API_BASE}/api/thread?key={ACCESS_KEY}&id={CONVERSATION_ID}
+           -> { conversation:{...}, messages:[{direction:SENT|REPLY,from_email,
+                to_email,subject,body_html,preview,sent_at,seq_number}] }
+    API_BASE is the value of window.INBOX_API_BASE; ACCESS_KEY comes from the
+    page URL's ?key= parameter.
+  - The current page state is mirrored as JSON in <script id="inbox-data">.
+  - DOM conventions: conversation rows are [role="listitem"] elements carrying
+    data-conversation-id, data-lead-email, data-lead-name, data-category,
+    data-campaign-id, data-campaign-name, data-last-message-at, data-reply-count.
+    Stat tiles carry data-stat / data-value. Thread messages carry
+    data-direction, data-from, data-to, data-sent-at.
+-->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -16,13 +38,28 @@
   .brand .sub { font-size: 12px; color: #6b7280; }
   .brand { display: flex; align-items: center; gap: 11px; margin-right: auto; }
   .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .controls select, .controls input { border: 1px solid #d1d5db; border-radius: 8px; padding: 7px 10px; font-size: 13px; background: #fff; color: #111827; }
+  .controls select, .controls input { border: 1px solid #d1d5db; border-radius: 8px; padding: 7px 10px; font-size: 13px; background: #fff; color: #111827; max-width: 260px; }
   .controls input { width: 210px; }
   .controls button { border: 1px solid #d1d5db; background: #fff; border-radius: 8px; padding: 7px 12px; font-size: 13px; cursor: pointer; color: #374151; }
   .controls button:hover { background: #f9fafb; }
+  #statsBar { background: #fff; border-bottom: 1px solid #e5e7eb; padding: 12px 20px; display: none; }
+  #campaignContext { font-size: 12px; color: #6b7280; margin-bottom: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #campaignContext .cname { font-weight: 650; color: #111827; font-size: 12.5px; }
+  #campaignContext .dot { color: #d1d5db; }
+  .statuschip { font-size: 10px; font-weight: 700; letter-spacing: .05em; padding: 2px 8px; border-radius: 99px; background: #dcfce7; color: #15803d; }
+  .statuschip.inactive { background: #f3f4f6; color: #6b7280; }
+  #stats { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 2px; }
+  .stat { flex: none; min-width: 118px; border: 1px solid #e5e7eb; border-radius: 10px; padding: 9px 14px; background: #fafafa; }
+  .stat .v { font-size: 19px; font-weight: 700; color: #111827; line-height: 1.2; }
+  .stat .l { font-size: 11px; color: #6b7280; margin-top: 2px; }
+  .stat .s { font-size: 10.5px; color: #9ca3af; margin-top: 1px; }
+  .stat.hl { background: #eef2ff; border-color: #c7d2fe; }
+  .stat.hl .v { color: #4338ca; }
+  .stat.good { background: #f0fdf4; border-color: #bbf7d0; }
+  .stat.good .v { color: #15803d; }
   main { flex: 1; display: flex; min-height: 0; }
   aside { width: 380px; flex: none; background: #fff; border-right: 1px solid #e5e7eb; overflow-y: auto; }
-  .count { padding: 10px 16px; font-size: 12px; color: #6b7280; border-bottom: 1px solid #f3f4f6; position: sticky; top: 0; background: #fff; }
+  .count { padding: 10px 16px; font-size: 12px; color: #6b7280; border-bottom: 1px solid #f3f4f6; position: sticky; top: 0; background: #fff; z-index: 1; }
   .item { padding: 13px 16px; border-bottom: 1px solid #f3f4f6; cursor: pointer; display: flex; gap: 11px; }
   .item:hover { background: #f9fafb; }
   .item.active { background: #eef2ff; }
@@ -34,12 +71,13 @@
   .subj { font-size: 12.5px; color: #374151; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
   .prev { font-size: 12px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
   .badges { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
-  .badge { font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: #f3f4f6; color: #4b5563; }
+  .badge { font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: #f3f4f6; color: #4b5563; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .badge.green { background: #dcfce7; color: #15803d; }
   .badge.amber { background: #fef3c7; color: #b45309; }
   .badge.red { background: #fee2e2; color: #b91c1c; }
   .badge.purple { background: #f3e8ff; color: #7e22ce; }
   .badge.blue { background: #dbeafe; color: #1d4ed8; }
+  .badge.campaign { background: #eef2ff; color: #4338ca; }
   section { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
   .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #9ca3af; font-size: 14px; gap: 8px; padding: 20px; text-align: center; }
   .thread-head { background: #fff; border-bottom: 1px solid #e5e7eb; padding: 14px 22px; }
@@ -47,6 +85,8 @@
   .thread-head h2 { font-size: 15px; font-weight: 650; }
   .thread-head .email { font-size: 12.5px; color: #6b7280; }
   .thread-head .subject { font-size: 13px; color: #374151; margin-top: 5px; }
+  .thread-head .campaign-line { font-size: 12px; color: #6b7280; margin-top: 4px; }
+  .thread-head .campaign-line b { color: #4338ca; font-weight: 650; }
   .back { display: none; border: 1px solid #d1d5db; background: #fff; border-radius: 8px; padding: 5px 10px; font-size: 13px; cursor: pointer; }
   .msgs { flex: 1; overflow-y: auto; padding: 18px 22px; }
   .msg { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; margin-bottom: 14px; max-width: 860px; overflow: hidden; }
@@ -67,6 +107,7 @@
     main:not(.show-thread) section { display: none; }
     .back { display: inline-block; }
     .controls input { width: 130px; }
+    .stat { min-width: 104px; padding: 8px 11px; }
   }
 </style>
 </head>
@@ -78,20 +119,27 @@
       <div><h1 id="clientName">Loading&hellip;</h1><div class="sub">Campaign Reply Inbox</div></div>
     </div>
     <div class="controls">
-      <select id="campaignFilter" style="display:none"></select>
-      <input id="search" placeholder="Search name, email, subject&hellip;">
+      <select id="campaignFilter" style="display:none" aria-label="Filter by campaign"></select>
+      <input id="search" placeholder="Search name, email, subject&hellip;" aria-label="Search conversations">
       <button id="refresh">Refresh</button>
     </div>
   </header>
+  <div id="statsBar" role="region" aria-label="Campaign statistics">
+    <div id="campaignContext"></div>
+    <div id="stats"></div>
+  </div>
   <main id="main">
-    <aside id="listWrap"><div class="count" id="count"></div><div id="list"><div class="spinner">Loading conversations&hellip;</div></div></aside>
-    <section id="threadWrap"><div class="empty" id="threadEmpty"><div style="font-size:34px">&#128236;</div><div>Select a conversation to read the thread</div></div></section>
+    <aside id="listWrap"><div class="count" id="count"></div><div id="list" role="list" aria-label="Conversations with replies"><div class="spinner">Loading conversations&hellip;</div></div></aside>
+    <section id="threadWrap" aria-label="Conversation thread"><div class="empty" id="threadEmpty"><div style="font-size:34px">&#128236;</div><div>Select a conversation to read the thread</div></div></section>
   </main>
 </div>
+<script type="application/json" id="inbox-data">{}</script>
 <script>
 (function () {
   var BASE = 'https://mgnjlymtjmcoskqinhid.supabase.co/functions/v1/inbox';
+  window.INBOX_API_BASE = BASE;
   var KEY = new URLSearchParams(location.search).get('key') || '';
+  var POSITIVE = ['interested', 'meeting request', 'information request'];
   var state = { data: null, selected: null, campaign: 'all', q: '' };
 
   function api(path) {
@@ -127,6 +175,14 @@
     return '';
   }
 
+  function isPositive(c) {
+    var s = (c || '').toLowerCase();
+    if (!s) return false;
+    if (s.indexOf('not interested') >= 0) return false;
+    for (var i = 0; i < POSITIVE.length; i++) if (s.indexOf(POSITIVE[i]) >= 0) return true;
+    return false;
+  }
+
   function fmtShort(t) {
     if (!t) return '';
     var d = new Date(t), now = new Date();
@@ -144,24 +200,115 @@
     return new Date(t).toLocaleString([], { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
   }
 
+  function num(x) { return (x == null || isNaN(x)) ? 0 : Number(x); }
+  function fmtNum(x) { return num(x).toLocaleString(); }
+
+  function campaignById(id) {
+    var cs = state.data ? state.data.campaigns : [];
+    for (var i = 0; i < cs.length; i++) if (String(cs[i].id) === String(id)) return cs[i];
+    return null;
+  }
+
+  function selectedCampaigns() {
+    var cs = state.data ? state.data.campaigns : [];
+    if (state.campaign === 'all') return cs;
+    var c = campaignById(state.campaign);
+    return c ? [c] : [];
+  }
+
+  function statTile(key, value, label, sub, cls) {
+    var t = el('div', 'stat' + (cls ? ' ' + cls : ''));
+    t.setAttribute('data-stat', key);
+    t.setAttribute('data-value', String(value));
+    t.appendChild(el('div', 'v', typeof value === 'number' ? fmtNum(value) : String(value)));
+    t.appendChild(el('div', 'l', label));
+    if (sub) t.appendChild(el('div', 's', sub));
+    return t;
+  }
+
+  function renderStats() {
+    var bar = document.getElementById('statsBar');
+    var ctx = document.getElementById('campaignContext');
+    var wrap = document.getElementById('stats');
+    var cs = selectedCampaigns();
+    if (!cs.length) { bar.style.display = 'none'; return; }
+    bar.style.display = '';
+    ctx.innerHTML = '';
+    wrap.innerHTML = '';
+
+    if (cs.length === 1) {
+      var c = cs[0];
+      ctx.setAttribute('data-campaign-id', String(c.id));
+      ctx.setAttribute('data-campaign-name', c.name || '');
+      ctx.setAttribute('data-campaign-status', c.status || '');
+      ctx.appendChild(el('span', null, 'Campaign:'));
+      ctx.appendChild(el('span', 'cname', c.name || ('#' + c.id)));
+      ctx.appendChild(el('span', 'statuschip' + ((c.status || '') === 'ACTIVE' ? '' : ' inactive'), c.status || 'UNKNOWN'));
+      if (c.last_synced_at) {
+        ctx.appendChild(el('span', 'dot', '·'));
+        ctx.appendChild(el('span', null, 'Data updated ' + fmtLong(c.last_synced_at)));
+      }
+    } else {
+      ctx.removeAttribute('data-campaign-id');
+      ctx.appendChild(el('span', 'cname', 'All campaigns (' + cs.length + ')'));
+    }
+
+    var agg = { total_leads: 0, unique_sent_count: 0, sent_count: 0, reply_count: 0, open: 0, bounce_count: 0 };
+    cs.forEach(function (c) {
+      var s = c.stats || {};
+      agg.total_leads += num(s.total_leads);
+      agg.unique_sent_count += num(s.unique_sent_count);
+      agg.sent_count += num(s.sent_count);
+      agg.reply_count += num(s.reply_count);
+      agg.open += num(s.unique_open_count);
+      agg.bounce_count += num(s.bounce_count);
+    });
+
+    var ids = {};
+    cs.forEach(function (c) { ids[String(c.id)] = true; });
+    var convs = (state.data ? state.data.conversations : []).filter(function (c) { return ids[String(c.campaign_id)]; });
+    var positive = convs.filter(function (c) { return isPositive(c.lead_category); }).length;
+
+    var replyRate = agg.unique_sent_count ? (agg.reply_count / agg.unique_sent_count * 100) : 0;
+    var positiveRate = agg.reply_count ? (positive / agg.reply_count * 100) : 0;
+
+    wrap.appendChild(statTile('total_leads', agg.total_leads, 'Leads in campaign'));
+    wrap.appendChild(statTile('emails_sent', agg.sent_count, 'Emails sent', fmtNum(agg.unique_sent_count) + ' people contacted'));
+    if (agg.open > 0) wrap.appendChild(statTile('unique_opens', agg.open, 'People opened'));
+    wrap.appendChild(statTile('replies', agg.reply_count, 'Replies', replyRate.toFixed(1) + '% of people contacted', 'hl'));
+    wrap.appendChild(statTile('positive_replies', positive, 'Positive replies', positiveRate.toFixed(0) + '% of replies · Interested / Meeting / Info', 'good'));
+    if (agg.bounce_count > 0) wrap.appendChild(statTile('bounces', agg.bounce_count, 'Bounced'));
+  }
+
   function renderList() {
     var list = document.getElementById('list');
     list.innerHTML = '';
     var convs = (state.data ? state.data.conversations : []).filter(function (c) {
       if (state.campaign !== 'all' && String(c.campaign_id) !== state.campaign) return false;
       if (state.q) {
-        var hay = ((c.lead_name || '') + ' ' + c.lead_email + ' ' + (c.subject || '') + ' ' + (c.last_message_preview || '')).toLowerCase();
+        var camp = campaignById(c.campaign_id);
+        var hay = ((c.lead_name || '') + ' ' + c.lead_email + ' ' + (c.subject || '') + ' ' + (c.last_message_preview || '') + ' ' + (camp ? camp.name : '')).toLowerCase();
         if (hay.indexOf(state.q) < 0) return false;
       }
       return true;
     });
-    document.getElementById('count').textContent = convs.length + ' conversation' + (convs.length === 1 ? '' : 's');
+    document.getElementById('count').textContent = convs.length + ' conversation' + (convs.length === 1 ? '' : 's') + ' with replies';
     if (!convs.length) {
       list.appendChild(el('div', 'spinner', 'No replies yet.'));
       return;
     }
     convs.forEach(function (c) {
+      var camp = campaignById(c.campaign_id);
       var item = el('div', 'item' + (state.selected === c.id ? ' active' : ''));
+      item.setAttribute('role', 'listitem');
+      item.setAttribute('data-conversation-id', c.id);
+      item.setAttribute('data-lead-email', c.lead_email);
+      item.setAttribute('data-lead-name', c.lead_name || '');
+      item.setAttribute('data-category', c.lead_category || '');
+      item.setAttribute('data-campaign-id', String(c.campaign_id));
+      item.setAttribute('data-campaign-name', camp ? (camp.name || '') : '');
+      item.setAttribute('data-last-message-at', c.last_message_at || '');
+      item.setAttribute('data-reply-count', String(c.reply_count));
       item.appendChild(el('div', 'avatar', initials(c.lead_name, c.lead_email)));
       var meta = el('div', 'meta');
       var r1 = el('div', 'row1');
@@ -173,6 +320,11 @@
       var badges = el('div', 'badges');
       if (c.lead_category) badges.appendChild(el('span', 'badge ' + (catCls(c.lead_category) || ''), c.lead_category));
       badges.appendChild(el('span', 'badge', c.reply_count + (c.reply_count === 1 ? ' reply' : ' replies')));
+      if (camp && camp.name) {
+        var cb = el('span', 'badge campaign', camp.name);
+        cb.title = 'Campaign: ' + camp.name;
+        badges.appendChild(cb);
+      }
       meta.appendChild(badges);
       item.appendChild(meta);
       item.onclick = function () { openThread(c.id); };
@@ -195,6 +347,10 @@
     var wrap = document.getElementById('threadWrap');
     wrap.innerHTML = '';
     var head = el('div', 'thread-head');
+    head.setAttribute('data-conversation-id', d.conversation.id);
+    head.setAttribute('data-lead-email', d.conversation.lead_email);
+    head.setAttribute('data-campaign-id', String(d.conversation.campaign_id));
+    head.setAttribute('data-campaign-name', d.conversation.campaign_name || '');
     var top = el('div', 'top');
     var back = el('button', 'back');
     back.innerHTML = '&larr; Inbox';
@@ -204,11 +360,20 @@
     top.appendChild(el('span', 'email', d.conversation.lead_email));
     if (d.conversation.lead_category) top.appendChild(el('span', 'badge ' + (catCls(d.conversation.lead_category) || ''), d.conversation.lead_category));
     head.appendChild(top);
-    head.appendChild(el('div', 'subject', (d.conversation.subject ? d.conversation.subject + '  ·  ' : '') + (d.conversation.campaign_name || '')));
+    if (d.conversation.subject) head.appendChild(el('div', 'subject', 'Subject: ' + d.conversation.subject));
+    var cl = el('div', 'campaign-line');
+    cl.appendChild(document.createTextNode('Campaign: '));
+    var cb = el('b', null, d.conversation.campaign_name || ('#' + d.conversation.campaign_id));
+    cl.appendChild(cb);
+    head.appendChild(cl);
     wrap.appendChild(head);
     var msgs = el('div', 'msgs');
     d.messages.forEach(function (m) {
       var card = el('div', 'msg ' + (m.direction === 'REPLY' ? 'reply' : ''));
+      card.setAttribute('data-direction', m.direction);
+      card.setAttribute('data-from', m.from_email || '');
+      card.setAttribute('data-to', m.to_email || '');
+      card.setAttribute('data-sent-at', m.sent_at || '');
       var mh = el('div', 'msg-head');
       mh.appendChild(el('span', 'dir ' + (m.direction === 'REPLY' ? 'reply' : 'sent'), m.direction === 'REPLY' ? 'REPLY' : 'SENT'));
       mh.appendChild(el('span', 'from', (m.from_email || '') + ' → ' + (m.to_email || '')));
@@ -217,12 +382,12 @@
       if (m.direction === 'REPLY') {
         card.appendChild(bodyFrame(m.body_html));
       } else {
-        var cb = el('div', 'collapsed-body');
-        cb.appendChild(document.createTextNode((m.preview || '').slice(0, 140) + '… '));
+        var cb2 = el('div', 'collapsed-body');
+        cb2.appendChild(document.createTextNode((m.preview || '').slice(0, 140) + '… '));
         var toggle = el('span', null, 'Show email');
-        cb.appendChild(toggle);
-        cb.onclick = function () { card.replaceChild(bodyFrame(m.body_html), cb); };
-        card.appendChild(cb);
+        cb2.appendChild(toggle);
+        cb2.onclick = function () { card.replaceChild(bodyFrame(m.body_html), cb2); };
+        card.appendChild(cb2);
       }
       msgs.appendChild(card);
     });
@@ -254,6 +419,8 @@
   function load(silent) {
     return api('/api/inbox').then(function (d) {
       state.data = d;
+      try { document.getElementById('inbox-data').textContent = JSON.stringify(d); } catch (e) {}
+      document.body.setAttribute('data-client', d.client.name || '');
       document.getElementById('clientName').textContent = d.client.name;
       document.getElementById('logo').textContent = (d.client.name || '?')[0].toUpperCase();
       document.title = d.client.name + ' — Reply Inbox';
@@ -271,6 +438,7 @@
         });
         sel.value = state.campaign;
       }
+      renderStats();
       renderList();
     }).catch(function (e) {
       if (!silent) showInvalid();
@@ -283,6 +451,7 @@
   });
   document.getElementById('campaignFilter').addEventListener('change', function (e) {
     state.campaign = e.target.value;
+    renderStats();
     renderList();
   });
   document.getElementById('refresh').addEventListener('click', function () { load(); });
