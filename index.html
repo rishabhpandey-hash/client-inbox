@@ -109,10 +109,20 @@
 
   main { flex: 1; display: flex; min-height: 0; }
   aside { width: 390px; flex: none; background: #fff; border-right: 1px solid #e7eaf0; overflow-y: auto; }
+  .listhead { position: sticky; top: 0; background: #fff; z-index: 1; border-bottom: 1px solid #f0f2f7; }
   .count {
-    padding: 10px 18px; font-size: 10.5px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase;
-    color: #8a94a6; border-bottom: 1px solid #f0f2f7; position: sticky; top: 0; background: #fff; z-index: 1;
+    padding: 10px 18px 6px; font-size: 10.5px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase;
+    color: #8a94a6;
   }
+  .filters { display: flex; gap: 6px; padding: 2px 14px 10px; overflow-x: auto; scrollbar-width: none; }
+  .filters::-webkit-scrollbar { display: none; }
+  .fchip {
+    font-size: 11px; font-weight: 600; padding: 4px 11px; border-radius: 99px;
+    border: 1px solid #e2e6ee; background: #fff; color: #475569; cursor: pointer;
+    white-space: nowrap; flex: none; transition: background .12s, border-color .12s;
+  }
+  .fchip:hover { background: #f4f6fa; }
+  .fchip.on { background: #4f46e5; border-color: #4f46e5; color: #fff; }
   .item {
     padding: 13px 16px 13px 18px; border-bottom: 1px solid #f0f2f7; cursor: pointer;
     display: flex; gap: 12px; position: relative;
@@ -336,7 +346,7 @@
     <div id="stats"></div>
   </div>
   <main id="main">
-    <aside id="listWrap"><div class="count" id="count">Loading</div><div id="list" role="list" aria-label="Conversations with replies"></div></aside>
+    <aside id="listWrap"><div class="listhead"><div class="count" id="count">Loading</div><div class="filters" id="filters" role="tablist" aria-label="Filter conversations"></div></div><div id="list" role="list" aria-label="Conversations with replies"></div></aside>
     <section id="threadWrap"><div class="empty" id="threadEmpty"><div class="big">&#128236;</div><div>Select a conversation to read the thread</div></div></section>
   </main>
   <div id="adminWrap">
@@ -385,7 +395,7 @@ var sb = createClient(SUPABASE_URL, ANON_KEY, {
 });
 
 var POSITIVE = ['interested', 'meeting request', 'information request'];
-var state = { data: null, selected: null, campaign: 'all', q: '', adminClientId: null };
+var state = { data: null, selected: null, campaign: 'all', q: '', filter: 'all', adminClientId: null };
 var appStarted = false;
 
 async function api(path, opts) {
@@ -572,11 +582,43 @@ function renderStats() {
   if (agg.bounce_count > 0) wrap.appendChild(statTile('bounces', agg.bounce_count, 'Bounced'));
 }
 
+function matchesFilter(c) {
+  var f = state.filter;
+  if (f === 'all') return true;
+  if (f === 'needs_reply') return c.last_direction === 'REPLY';
+  if (f === 'positive') return isPositive(c.lead_category);
+  if (f.indexOf('cat:') === 0) return (c.lead_category || '') === f.slice(4);
+  return true;
+}
+
+function renderFilters(base) {
+  var wrap = document.getElementById('filters');
+  wrap.innerHTML = '';
+  var needs = base.filter(function (c) { return c.last_direction === 'REPLY'; }).length;
+  var pos = base.filter(function (c) { return isPositive(c.lead_category); }).length;
+  var cats = {};
+  base.forEach(function (c) { if (c.lead_category) cats[c.lead_category] = (cats[c.lead_category] || 0) + 1; });
+  var defs = [['all', 'All', base.length], ['needs_reply', 'Needs reply', needs], ['positive', 'Positive', pos]];
+  Object.keys(cats).sort().forEach(function (k) { defs.push(['cat:' + k, k, cats[k]]); });
+  defs.forEach(function (d) {
+    if (d[0] !== 'all' && !d[2] && state.filter !== d[0]) return;
+    var b = el('button', 'fchip' + (state.filter === d[0] ? ' on' : ''), d[1] + ' · ' + d[2]);
+    b.type = 'button';
+    b.setAttribute('data-filter', d[0]);
+    b.onclick = function () { state.filter = d[0]; renderList(); };
+    wrap.appendChild(b);
+  });
+}
+
 function renderList() {
   var list = document.getElementById('list');
   list.innerHTML = '';
-  var convs = (state.data ? state.data.conversations : []).filter(function (c) {
-    if (state.campaign !== 'all' && String(c.campaign_id) !== state.campaign) return false;
+  var base = (state.data ? state.data.conversations : []).filter(function (c) {
+    return state.campaign === 'all' || String(c.campaign_id) === state.campaign;
+  });
+  renderFilters(base);
+  var convs = base.filter(function (c) {
+    if (!matchesFilter(c)) return false;
     if (state.q) {
       var camp = campaignById(c.campaign_id);
       var hay = ((c.lead_name || '') + ' ' + c.lead_email + ' ' + (c.subject || '') + ' ' + (c.last_message_preview || '') + ' ' + (camp ? camp.name : '')).toLowerCase();
@@ -586,7 +628,10 @@ function renderList() {
   });
   document.getElementById('count').textContent = convs.length + ' conversation' + (convs.length === 1 ? '' : 's') + ' with replies';
   if (!convs.length) {
-    list.appendChild(el('div', 'spinner', 'No replies yet.'));
+    list.appendChild(el('div', 'spinner',
+      state.filter !== 'all' || state.q
+        ? 'Nothing matches this filter — try another chip or clear the search.'
+        : 'No replies yet.'));
     return;
   }
   convs.forEach(function (c) {
@@ -722,9 +767,21 @@ function renderThread(d) {
     ed.setAttribute('aria-label', 'Reply message');
     var ccRow = el('div', 'cc-row');
     var ccIn = document.createElement('input');
-    ccIn.placeholder = 'Cc — comma separated emails (optional)';
+    ccIn.placeholder = 'Cc — type or paste addresses, comma separated (optional)';
     var bccIn = document.createElement('input');
-    bccIn.placeholder = 'Bcc — comma separated emails (optional)';
+    bccIn.placeholder = 'Bcc — type or paste addresses, comma separated (optional)';
+    // No browser autofill/suggestions here: addresses must be typed or pasted.
+    [ccIn, bccIn].forEach(function (inp) {
+      inp.type = 'text';
+      inp.name = 'nofill-' + Math.random().toString(36).slice(2);
+      inp.setAttribute('autocomplete', 'off');
+      inp.setAttribute('autocorrect', 'off');
+      inp.setAttribute('autocapitalize', 'off');
+      inp.spellcheck = false;
+      inp.setAttribute('readonly', 'readonly');
+      inp.addEventListener('focus', function () { inp.removeAttribute('readonly'); });
+      inp.addEventListener('blur', function () { inp.setAttribute('readonly', 'readonly'); });
+    });
     ccRow.appendChild(ccIn);
     ccRow.appendChild(bccIn);
     ccLink.onclick = function () {
