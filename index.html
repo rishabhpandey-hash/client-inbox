@@ -758,7 +758,7 @@ document.getElementById('sendLink').addEventListener('click', async function () 
   if (res.error) {
     msg.className = 'msg err';
     msg.textContent = res.error.message.indexOf('rate') >= 0
-      ? 'Too many attempts — please wait a few minutes and try again.'
+      ? 'Email limit reached — the login mailer allows only a few emails per hour. Please try again in about an hour. Once you are in, your session lasts for weeks.'
       : 'Could not send the email: ' + res.error.message;
     return;
   }
@@ -810,8 +810,26 @@ sb.auth.onAuthStateChange(function (event, session) {
   if (session) startApp();
 });
 
+// Fallback for login links opened "late": gotrue-js ignores URL sessions it
+// considers stale, so if tokens are still sitting in the hash after boot,
+// install them manually via setSession (the refresh token does the real work).
+async function tryHashSession() {
+  var h = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+  var at = h.get('access_token'), rt = h.get('refresh_token');
+  if (!at || !rt) return false;
+  try {
+    var res = await sb.auth.setSession({ access_token: at, refresh_token: rt });
+    history.replaceState(null, '', location.pathname + location.search);
+    return !res.error && !!res.data.session;
+  } catch (e) {
+    return false;
+  }
+}
+
 var boot = await sb.auth.getSession();
-if (boot.data.session) { startApp(); } else { showGate(); }
+if (boot.data.session) { startApp(); }
+else if (await tryHashSession()) { startApp(); }
+else { showGate(); }
 </script>
 </body>
 </html>
