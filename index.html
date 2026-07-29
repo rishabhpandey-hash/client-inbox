@@ -278,8 +278,10 @@
   .adm-add:disabled { opacity: .5; }
   .adm-adduser { display: flex; gap: 8px; margin-top: 9px; align-items: center; flex-wrap: wrap; }
   .adm-campwrap { margin-top: 8px; }
-  .adm-campsel { width: 100%; border: 1px solid #d8dee8; border-radius: 8px; padding: 4px; font-size: 12px; min-height: 66px; color: #334155; }
-  .adm-campsel option { padding: 3px 6px; }
+  .adm-camplist { border: 1px solid #d8dee8; border-radius: 8px; padding: 6px 10px; max-height: 132px; overflow-y: auto; background: #fafbfd; }
+  .adm-campitem { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #334155; padding: 3.5px 0; cursor: pointer; }
+  .adm-campitem input { flex: none; cursor: pointer; }
+  .adm-campitem span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .adm-hint { font-size: 10.5px; color: #94a3b8; margin-top: 4px; line-height: 1.4; }
   .adm-adduser input:not([type=checkbox]) { flex: 1; min-width: 170px; border: 1px solid #d8dee8; border-radius: 8px; padding: 7px 10px; font-size: 12.5px; }
   .admin-row { display: flex; gap: 8px; margin-top: 6px; }
@@ -1137,24 +1139,30 @@ function renderAdmin() {
     lb2.appendChild(document.createTextNode(' reply'));
     var add = el('button', 'adm-add', 'Add user');
     var campWrap = el('div', 'adm-campwrap');
-    var campSel = document.createElement('select');
-    campSel.multiple = true;
-    campSel.className = 'adm-campsel';
+    var campList = el('div', 'adm-camplist');
+    var campBoxes = [];
     adminData.campaigns
       .filter(function (x) { return x.client_id === c.id; })
       .forEach(function (cp) {
-        var o = document.createElement('option');
-        o.value = String(cp.id);
-        o.textContent = cp.name;
-        campSel.appendChild(o);
+        var item = el('label', 'adm-campitem');
+        var box = document.createElement('input');
+        box.type = 'checkbox';
+        box.value = String(cp.id);
+        campBoxes.push(box);
+        item.appendChild(box);
+        var nm = el('span', null, cp.name);
+        nm.title = cp.name;
+        item.appendChild(nm);
+        campList.appendChild(item);
       });
-    campWrap.appendChild(campSel);
+    if (!campBoxes.length) campList.appendChild(el('div', 'adm-hint', 'No campaigns mapped to this client yet.'));
+    campWrap.appendChild(campList);
     campWrap.appendChild(el('div', 'adm-hint',
-      'Campaign access for this user: Ctrl/Cmd-click to pick specific campaigns. Leave none selected to give access to ALL of this client’s campaigns. To change an existing user’s access, re-add the same email with the new selection.'));
+      'Campaign access for this user: tick specific campaigns to limit them, or leave ALL unticked to give access to every campaign of this client. To change an existing user’s access, re-add the same email with the new selection.'));
     add.onclick = function () {
       var v = em.value.trim();
       if (!v) return;
-      var ids = Array.from(campSel.selectedOptions).map(function (o) { return Number(o.value); });
+      var ids = campBoxes.filter(function (b) { return b.checked; }).map(function (b) { return Number(b.value); });
       adminApi('/api/admin/users', { email: v, client_id: c.id, can_reply: cb2.checked, campaign_ids: ids })
         .then(function () {
           setAdminStatus('Added ' + v + ' to ' + c.name + (ids.length ? ' (' + ids.length + ' campaign' + (ids.length > 1 ? 's' : '') + ' only)' : ' (all campaigns)'));
