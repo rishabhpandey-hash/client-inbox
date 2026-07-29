@@ -312,7 +312,8 @@
     <div class="logo">✉</div>
     <h1>Campaign Reply Inbox</h1>
     <div class="sub2">See every reply to your outreach campaigns,<br>updated in real time.</div>
-    <div id="loginForm">
+    <div id="bootMsg" class="msg info" style="padding:10px 0 4px">Checking your session&hellip;</div>
+    <div id="loginForm" style="display:none">
       <label for="loginEmail">Work email</label>
       <input id="loginEmail" type="email" placeholder="you@company.com" autocomplete="email">
       <button class="primary" id="sendLink">Email me a login link</button>
@@ -857,6 +858,7 @@ function openThread(id) {
 function showGate() {
   document.getElementById('app').style.display = 'none';
   document.getElementById('gate').style.display = 'flex';
+  document.getElementById('bootMsg').style.display = 'none';
   document.getElementById('loginForm').style.display = 'block';
   document.getElementById('deniedBox').style.display = 'none';
 }
@@ -864,6 +866,7 @@ function showGate() {
 function showDenied(email) {
   document.getElementById('app').style.display = 'none';
   document.getElementById('gate').style.display = 'flex';
+  document.getElementById('bootMsg').style.display = 'none';
   document.getElementById('loginForm').style.display = 'none';
   var box = document.getElementById('deniedBox');
   box.style.display = 'block';
@@ -955,6 +958,9 @@ var refreshTimer = null;
 async function startApp() {
   if (appStarted) return;
   appStarted = true;
+  // Session exists: show the app shell (with skeletons) right away instead of
+  // flashing the login card while data loads.
+  showApp();
   await load();
   if (refreshTimer) clearInterval(refreshTimer);
   refreshTimer = setInterval(function () {
