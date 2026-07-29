@@ -750,7 +750,10 @@ document.getElementById('sendLink').addEventListener('click', async function () 
   var btn = this;
   btn.disabled = true;
   msg.className = 'msg info'; msg.textContent = 'Sending…';
-  var res = await sb.auth.signInWithOtp({ email: email });
+  var res = await sb.auth.signInWithOtp({
+    email: email,
+    options: { emailRedirectTo: location.origin + location.pathname }
+  });
   btn.disabled = false;
   if (res.error) {
     msg.className = 'msg err';
