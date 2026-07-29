@@ -238,6 +238,33 @@
   .card .foot { margin-top: 22px; padding-top: 16px; border-top: 1px solid #f0f2f7; font-size: 11px; color: #94a3b8; text-align: center; line-height: 1.5; }
   #codeRow { display: none; margin-top: 14px; }
 
+  #adminWrap { display: none; flex: 1; overflow-y: auto; padding: 20px 24px; background: #f6f7f9; }
+  .admin-head { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+  .admin-head h2 { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+  .admin-head button { border: 1px solid #d8dee8; background: #fff; border-radius: 9px; padding: 7px 12px; font-size: 13px; cursor: pointer; color: #334155; }
+  .admin-body { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  .admin-col { flex: 1; min-width: 320px; display: flex; flex-direction: column; gap: 16px; }
+  .admin-card { background: #fff; border: 1px solid #e7eaf0; border-radius: 14px; padding: 16px 18px; }
+  .admin-card h3 { font-size: 11.5px; font-weight: 700; margin-bottom: 12px; text-transform: uppercase; letter-spacing: .06em; color: #64748b; }
+  .adm-client { border: 1px solid #eef1f6; border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+  .adm-client-name { font-weight: 700; font-size: 14px; margin-bottom: 8px; }
+  .adm-user { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #f5f6f9; font-size: 12.5px; flex-wrap: wrap; }
+  .adm-email { font-weight: 600; color: #334155; word-break: break-all; }
+  .adm-toggle { font-size: 11.5px; color: #64748b; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .adm-x { border: 1px solid #fecaca; color: #b91c1c; background: #fff; border-radius: 7px; padding: 3px 9px; font-size: 11px; cursor: pointer; margin-left: auto; }
+  .adm-add { border: 0; background: #4f46e5; color: #fff; border-radius: 7px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .adm-add:disabled { opacity: .5; }
+  .adm-adduser { display: flex; gap: 8px; margin-top: 9px; align-items: center; flex-wrap: wrap; }
+  .adm-adduser input:not([type=checkbox]) { flex: 1; min-width: 170px; border: 1px solid #d8dee8; border-radius: 8px; padding: 7px 10px; font-size: 12.5px; }
+  .admin-row { display: flex; gap: 8px; margin-top: 6px; }
+  .admin-row input { flex: 1; border: 1px solid #d8dee8; border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  .adm-camp { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid #f5f6f9; flex-wrap: wrap; }
+  .adm-camp-info { flex: 1; min-width: 200px; }
+  .adm-camp-name { font-size: 13px; font-weight: 600; }
+  .adm-camp-sub { font-size: 11.5px; color: #7c8698; margin-top: 2px; }
+  .adm-camp select { border: 1px solid #d8dee8; border-radius: 8px; padding: 6px 8px; font-size: 12px; max-width: 170px; }
+  #admStatus { margin-top: 12px; font-size: 12.5px; color: #16a34a; }
+  #admStatus.err { color: #dc2626; }
   @media (max-width: 760px) {
     aside { width: 100%; }
     main.show-thread aside { display: none; }
@@ -286,6 +313,8 @@
       <select id="campaignFilter" style="display:none" aria-label="Filter by campaign"></select>
       <input id="search" placeholder="Search name, email, subject&hellip;" aria-label="Search conversations">
       <button id="refresh">Refresh</button>
+      <select id="adminClient" style="display:none" aria-label="Admin: switch client view"></select>
+      <button id="adminBtn" style="display:none">Admin</button>
       <span class="whoami" id="whoami"></span>
       <button id="logout">Log out</button>
     </div>
@@ -298,6 +327,35 @@
     <aside id="listWrap"><div class="count" id="count">Loading</div><div id="list" role="list" aria-label="Conversations with replies"></div></aside>
     <section id="threadWrap"><div class="empty" id="threadEmpty"><div class="big">&#128236;</div><div>Select a conversation to read the thread</div></div></section>
   </main>
+  <div id="adminWrap">
+    <div class="admin-head">
+      <button id="adminBack">&larr; Back to inbox</button>
+      <h2>Admin — clients, campaigns &amp; access</h2>
+    </div>
+    <div class="admin-body">
+      <div class="admin-col">
+        <div class="admin-card">
+          <h3>Clients &amp; who can log in</h3>
+          <div id="admClients"><div class="spinner">Loading&hellip;</div></div>
+          <div class="admin-row">
+            <input id="admNewClient" placeholder="New client name (e.g. LookAcross)">
+            <button id="admAddClient" class="adm-add">Add client</button>
+          </div>
+        </div>
+      </div>
+      <div class="admin-col">
+        <div class="admin-card">
+          <h3>SmartLead campaigns not on the dashboard</h3>
+          <div id="admUnmapped"><div class="spinner">Loading&hellip;</div></div>
+        </div>
+        <div class="admin-card">
+          <h3>Campaigns on the dashboard</h3>
+          <div id="admMapped"><div class="spinner">Loading&hellip;</div></div>
+        </div>
+      </div>
+    </div>
+    <div id="admStatus"></div>
+  </div>
 </div>
 <script type="application/json" id="inbox-data">{}</script>
 <script type="module">
@@ -315,10 +373,13 @@ var sb = createClient(SUPABASE_URL, ANON_KEY, {
 });
 
 var POSITIVE = ['interested', 'meeting request', 'information request'];
-var state = { data: null, selected: null, campaign: 'all', q: '' };
+var state = { data: null, selected: null, campaign: 'all', q: '', adminClientId: null };
 var appStarted = false;
 
 async function api(path, opts) {
+  if (state.adminClientId && path.indexOf('/api/admin/') !== 0) {
+    path += (path.indexOf('?') >= 0 ? '&' : '?') + 'client_id=' + encodeURIComponent(state.adminClientId);
+  }
   var s = await sb.auth.getSession();
   var token = s.data.session ? s.data.session.access_token : '';
   opts = opts || {};
@@ -715,6 +776,20 @@ function load(silent) {
       });
       sel.value = state.campaign;
     }
+    if (d.client.is_admin) {
+      document.getElementById('adminBtn').style.display = '';
+      var asel = document.getElementById('adminClient');
+      if ((d.client.clients || []).length > 1) {
+        asel.style.display = '';
+        asel.innerHTML = '';
+        d.client.clients.forEach(function (c) {
+          var o = document.createElement('option');
+          o.value = c.id; o.textContent = 'Client: ' + c.name;
+          asel.appendChild(o);
+        });
+        asel.value = d.client.viewing_client_id;
+      }
+    }
     showApp();
     renderStats();
     renderList();
@@ -805,6 +880,190 @@ document.getElementById('campaignFilter').addEventListener('change', function (e
   renderList();
 });
 document.getElementById('refresh').addEventListener('click', function () { load(); });
+
+// ---------- Admin panel ----------
+var adminData = null;
+
+function adminApi(path, body) {
+  return api(path, body ? {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  } : undefined);
+}
+
+function setAdminStatus(txt, isErr) {
+  var s = document.getElementById('admStatus');
+  s.className = isErr ? 'err' : '';
+  s.textContent = txt || '';
+}
+
+function admErr(e) {
+  setAdminStatus('Error: ' + ((e.body && e.body.error) || e.message || 'unknown'), true);
+}
+
+function openAdmin() {
+  document.getElementById('statsBar').style.display = 'none';
+  document.getElementById('main').style.display = 'none';
+  document.getElementById('adminWrap').style.display = 'block';
+  setAdminStatus('');
+  loadAdmin();
+}
+
+function closeAdmin() {
+  document.getElementById('adminWrap').style.display = 'none';
+  document.getElementById('main').style.display = 'flex';
+  load(true);
+}
+
+function loadAdmin() {
+  document.getElementById('admClients').innerHTML = '<div class="spinner">Loading…</div>';
+  document.getElementById('admUnmapped').innerHTML = '<div class="spinner">Checking SmartLead… (a few seconds)</div>';
+  document.getElementById('admMapped').innerHTML = '';
+  api('/api/admin/overview').then(function (d) {
+    adminData = d;
+    renderAdmin();
+  }).catch(admErr);
+}
+
+function renderAdmin() {
+  var wrap = document.getElementById('admClients');
+  wrap.innerHTML = '';
+  adminData.clients.forEach(function (c) {
+    var card = el('div', 'adm-client');
+    card.appendChild(el('div', 'adm-client-name', c.name));
+    adminData.users.filter(function (u) { return u.client_id === c.id; }).forEach(function (u) {
+      var row = el('div', 'adm-user');
+      row.appendChild(el('span', 'adm-email', u.email));
+      if (u.is_admin) {
+        row.appendChild(el('span', 'badge blue', 'admin'));
+      } else {
+        var lbl = el('label', 'adm-toggle');
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = !!u.can_reply;
+        cb.onchange = function () {
+          adminApi('/api/admin/users/reply', { email: u.email, can_reply: cb.checked })
+            .then(function () { setAdminStatus('Updated ' + u.email); })
+            .catch(function (e) { admErr(e); loadAdmin(); });
+        };
+        lbl.appendChild(cb);
+        lbl.appendChild(document.createTextNode(' can reply'));
+        row.appendChild(lbl);
+        var rm = el('button', 'adm-x', 'Remove');
+        rm.onclick = function () {
+          if (!confirm('Remove access for ' + u.email + '?')) return;
+          adminApi('/api/admin/users/delete', { email: u.email }).then(loadAdmin).catch(admErr);
+        };
+        row.appendChild(rm);
+      }
+      card.appendChild(row);
+    });
+    var ar = el('div', 'adm-adduser');
+    var em = document.createElement('input');
+    em.placeholder = 'email@company.com';
+    var lb2 = el('label', 'adm-toggle');
+    var cb2 = document.createElement('input');
+    cb2.type = 'checkbox';
+    lb2.appendChild(cb2);
+    lb2.appendChild(document.createTextNode(' reply'));
+    var add = el('button', 'adm-add', 'Add user');
+    add.onclick = function () {
+      var v = em.value.trim();
+      if (!v) return;
+      adminApi('/api/admin/users', { email: v, client_id: c.id, can_reply: cb2.checked })
+        .then(function () { setAdminStatus('Added ' + v + ' to ' + c.name); loadAdmin(); })
+        .catch(admErr);
+    };
+    ar.appendChild(em);
+    ar.appendChild(lb2);
+    ar.appendChild(add);
+    card.appendChild(ar);
+    wrap.appendChild(card);
+  });
+
+  var un = document.getElementById('admUnmapped');
+  un.innerHTML = '';
+  if (!adminData.unmapped.length) {
+    un.appendChild(el('div', 'spinner', 'Every SmartLead campaign is already on the dashboard.'));
+  }
+  adminData.unmapped.forEach(function (c) {
+    var row = el('div', 'adm-camp');
+    var info = el('div', 'adm-camp-info');
+    info.appendChild(el('div', 'adm-camp-name', c.name));
+    info.appendChild(el('div', 'adm-camp-sub',
+      (c.status || '') +
+      (c.tags && c.tags.length ? ' · ' + c.tags.join(', ') : '') +
+      ' · ' + (c.sent_count || 0).toLocaleString() + ' sent · ' + (c.reply_count || 0) + ' replies'));
+    row.appendChild(info);
+    var sel = document.createElement('select');
+    adminData.clients.forEach(function (cl) {
+      var o = document.createElement('option');
+      o.value = cl.id; o.textContent = cl.name;
+      sel.appendChild(o);
+    });
+    var btn = el('button', 'adm-add', 'Map');
+    btn.onclick = function () {
+      btn.disabled = true;
+      btn.textContent = 'Mapping…';
+      adminApi('/api/admin/campaigns/map', { campaign_id: c.id, client_id: sel.value })
+        .then(function () {
+          setAdminStatus('"' + c.name + '" mapped. Reply history is backfilling in the background — it appears on the dashboard within a few minutes.');
+          loadAdmin();
+        })
+        .catch(function (e) { btn.disabled = false; btn.textContent = 'Map'; admErr(e); });
+    };
+    row.appendChild(sel);
+    row.appendChild(btn);
+    un.appendChild(row);
+  });
+
+  var mp = document.getElementById('admMapped');
+  mp.innerHTML = '';
+  adminData.campaigns.forEach(function (c) {
+    var row = el('div', 'adm-camp');
+    var cl = adminData.clients.filter(function (x) { return x.id === c.client_id; })[0];
+    var info = el('div', 'adm-camp-info');
+    info.appendChild(el('div', 'adm-camp-name', c.name));
+    info.appendChild(el('div', 'adm-camp-sub',
+      (cl ? cl.name : '?') + ' · ' + (c.status || '') + ' · ' + ((c.stats && c.stats.reply_count) || 0) + ' replies'));
+    row.appendChild(info);
+    var btn = el('button', 'adm-x', 'Unmap');
+    btn.onclick = function () {
+      if (!confirm('Remove "' + c.name + '" and its synced conversations from the dashboard? (Nothing changes in SmartLead itself.)')) return;
+      adminApi('/api/admin/campaigns/unmap', { campaign_id: c.id }).then(loadAdmin).catch(admErr);
+    };
+    row.appendChild(btn);
+    mp.appendChild(row);
+  });
+}
+
+document.getElementById('adminBtn').addEventListener('click', openAdmin);
+document.getElementById('adminBack').addEventListener('click', closeAdmin);
+document.getElementById('admAddClient').addEventListener('click', function () {
+  var name = document.getElementById('admNewClient').value.trim();
+  if (!name) return;
+  adminApi('/api/admin/clients', { name: name })
+    .then(function () {
+      document.getElementById('admNewClient').value = '';
+      setAdminStatus('Client "' + name + '" created — now map campaigns and add user emails.');
+      loadAdmin();
+    })
+    .catch(admErr);
+});
+document.getElementById('adminClient').addEventListener('change', function (e) {
+  state.adminClientId = e.target.value;
+  state.campaign = 'all';
+  state.selected = null;
+  var tw = document.getElementById('threadWrap');
+  tw.innerHTML = '';
+  var em = el('div', 'empty');
+  em.appendChild(el('div', 'big', '📬'));
+  em.appendChild(el('div', null, 'Select a conversation to read the thread'));
+  tw.appendChild(em);
+  load();
+});
+// ---------- end admin panel ----------
 
 sb.auth.onAuthStateChange(function (event, session) {
   if (session) startApp();
