@@ -896,6 +896,13 @@ function load(silent) {
         sel.appendChild(o);
       });
       sel.value = state.campaign;
+    } else {
+      sel.style.display = 'none';
+      sel.innerHTML = '';
+    }
+    if (state.campaign !== 'all' && !d.campaigns.some(function (c) { return String(c.id) === state.campaign; })) {
+      state.campaign = 'all';
+      if (d.campaigns.length > 1) sel.value = 'all';
     }
     if (d.client.is_admin) {
       document.getElementById('adminBtn').style.display = '';
@@ -909,17 +916,24 @@ function load(silent) {
           asel.appendChild(o);
         });
         asel.value = d.client.viewing_client_id;
+      } else {
+        asel.style.display = 'none';
       }
+    } else {
+      document.getElementById('adminBtn').style.display = 'none';
+      document.getElementById('adminClient').style.display = 'none';
     }
     showApp();
     renderStats();
     renderList();
   }).catch(function (e) {
     if (e.status === 403) {
+      appStarted = false;
       sb.auth.getUser().then(function (u) {
         showDenied(u.data.user ? u.data.user.email : null);
       });
     } else if (e.status === 401) {
+      appStarted = false;
       showGate();
     } else if (!silent) {
       showApp();
@@ -930,11 +944,13 @@ function load(silent) {
   });
 }
 
+var refreshTimer = null;
 async function startApp() {
   if (appStarted) return;
   appStarted = true;
   await load();
-  setInterval(function () {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(function () {
     if (document.getElementById('app').style.display !== 'none') load(true);
   }, 120000);
 }
@@ -983,6 +999,22 @@ document.getElementById('logout').addEventListener('click', async function () {
   await sb.auth.signOut();
   appStarted = false;
   state.data = null;
+  state.selected = null;
+  state.campaign = 'all';
+  state.filter = 'all';
+  state.q = '';
+  state.adminClientId = null;
+  document.getElementById('search').value = '';
+  document.getElementById('adminBtn').style.display = 'none';
+  document.getElementById('adminClient').style.display = 'none';
+  document.getElementById('adminWrap').style.display = 'none';
+  document.getElementById('main').style.display = 'flex';
+  var tw = document.getElementById('threadWrap');
+  tw.innerHTML = '';
+  var em = el('div', 'empty');
+  em.appendChild(el('div', 'big', '📬'));
+  em.appendChild(el('div', null, 'Select a conversation to read the thread'));
+  tw.appendChild(em);
   showGate();
 });
 
