@@ -202,6 +202,18 @@
   .composer .status { font-size: 12px; margin-left: auto; }
   .composer .status.ok { color: #16a34a; font-weight: 600; }
   .composer .status.err { color: #dc2626; }
+  .composer .toolbar { display: flex; gap: 5px; align-items: center; margin-bottom: 7px; max-width: 880px; }
+  .tbtn { border: 1px solid #d8dee8; background: #fff; border-radius: 7px; width: 30px; height: 27px; font-size: 12.5px; cursor: pointer; color: #334155; line-height: 1; }
+  .tbtn:hover { background: #f4f6fa; }
+  .swatch { width: 17px; height: 17px; border-radius: 99px; border: 2px solid #fff; box-shadow: 0 0 0 1px #d8dee8; cursor: pointer; padding: 0; }
+  .cclink { font-size: 11.5px; color: #4f46e5; cursor: pointer; font-weight: 600; margin-left: auto; }
+  .cclink:hover { text-decoration: underline; }
+  .editor { max-width: 880px; min-height: 84px; max-height: 260px; overflow-y: auto; border: 1px solid #d8dee8; border-radius: 12px; padding: 10px 13px; font-size: 13.5px; line-height: 1.55; background: #fff; color: #0f172a; }
+  .editor:empty::before { content: attr(data-placeholder); color: #9ca3af; pointer-events: none; }
+  .editor:focus { outline: none; border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(99, 102, 241, .15); }
+  .cc-row { display: none; gap: 8px; margin-top: 8px; max-width: 880px; flex-wrap: wrap; }
+  .cc-row input { flex: 1; min-width: 220px; border: 1px solid #d8dee8; border-radius: 8px; padding: 7px 10px; font-size: 12.5px; color: #0f172a; }
+  .cc-row input:focus { outline: none; border-color: #a5b4fc; }
 
   #gate {
     min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 24px;
@@ -672,9 +684,54 @@ function renderThread(d) {
   wrap.appendChild(msgs);
   if (state.data && state.data.client && state.data.client.can_reply) {
     var comp = el('div', 'composer');
-    var ta = document.createElement('textarea');
-    ta.placeholder = 'Write a reply to ' + (d.conversation.lead_name || d.conversation.lead_email) + '…';
-    ta.setAttribute('aria-label', 'Reply message');
+    var ed = el('div', 'editor');
+    var tb = el('div', 'toolbar');
+    function tbtn(html, cmd, val, title) {
+      var b = el('button', 'tbtn');
+      b.innerHTML = html;
+      b.type = 'button';
+      b.title = title;
+      b.addEventListener('mousedown', function (ev) { ev.preventDefault(); });
+      b.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ed.focus();
+        document.execCommand(cmd, false, val || null);
+      });
+      return b;
+    }
+    tb.appendChild(tbtn('<b>B</b>', 'bold', null, 'Bold'));
+    tb.appendChild(tbtn('<i>I</i>', 'italic', null, 'Italic'));
+    tb.appendChild(tbtn('<u>U</u>', 'underline', null, 'Underline'));
+    [['#111827', 'Default'], ['#dc2626', 'Red'], ['#2563eb', 'Blue'], ['#16a34a', 'Green']].forEach(function (c) {
+      var s = el('button', 'swatch');
+      s.type = 'button';
+      s.title = 'Text colour: ' + c[1];
+      s.style.background = c[0];
+      s.addEventListener('mousedown', function (ev) { ev.preventDefault(); });
+      s.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ed.focus();
+        document.execCommand('foreColor', false, c[0]);
+      });
+      tb.appendChild(s);
+    });
+    var ccLink = el('span', 'cclink', 'Cc / Bcc');
+    tb.appendChild(ccLink);
+    ed.contentEditable = 'true';
+    ed.setAttribute('data-placeholder', 'Write a reply to ' + (d.conversation.lead_name || d.conversation.lead_email) + '…');
+    ed.setAttribute('aria-label', 'Reply message');
+    var ccRow = el('div', 'cc-row');
+    var ccIn = document.createElement('input');
+    ccIn.placeholder = 'Cc — comma separated emails (optional)';
+    var bccIn = document.createElement('input');
+    bccIn.placeholder = 'Bcc — comma separated emails (optional)';
+    ccRow.appendChild(ccIn);
+    ccRow.appendChild(bccIn);
+    ccLink.onclick = function () {
+      var open = ccRow.style.display === 'flex';
+      ccRow.style.display = open ? 'none' : 'flex';
+      if (!open) ccIn.focus();
+    };
     var row = el('div', 'row');
     var btn = el('button', null, 'Send reply');
     var hint = el('span', 'hint', 'Sends from the same mailbox that emailed this lead, in the same thread.');
@@ -682,28 +739,35 @@ function renderThread(d) {
     row.appendChild(btn);
     row.appendChild(hint);
     row.appendChild(status);
-    comp.appendChild(ta);
+    comp.appendChild(tb);
+    comp.appendChild(ed);
+    comp.appendChild(ccRow);
     comp.appendChild(row);
     btn.onclick = function () {
-      var text = ta.value.trim();
-      if (!text) { status.className = 'status err'; status.textContent = 'Write a message first.'; return; }
-      btn.disabled = true; ta.disabled = true;
+      var plain = ed.innerText.replace(/ /g, ' ').trim();
+      if (!plain) { status.className = 'status err'; status.textContent = 'Write a message first.'; return; }
+      btn.disabled = true; ed.contentEditable = 'false';
       status.className = 'status'; status.textContent = 'Sending…';
       api('/api/reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversation_id: d.conversation.id, body: text })
+        body: JSON.stringify({
+          conversation_id: d.conversation.id,
+          body: plain,
+          body_html: ed.innerHTML,
+          cc: ccIn.value.trim(),
+          bcc: bccIn.value.trim()
+        })
       }).then(function (j) {
         if (j && j.ok) {
           status.className = 'status ok';
           status.textContent = 'Sent ✓';
-          ta.value = '';
           setTimeout(function () { openThread(d.conversation.id); }, 1200);
         } else {
           throw new Error('unexpected');
         }
       }).catch(function (e) {
-        btn.disabled = false; ta.disabled = false;
+        btn.disabled = false; ed.contentEditable = 'true';
         status.className = 'status err';
         status.textContent = 'Failed: ' + ((e.body && e.body.error) || e.message || 'unknown error');
       });
