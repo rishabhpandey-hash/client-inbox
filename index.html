@@ -20,10 +20,17 @@
            -> { conversation:{...}, messages:[{direction:SENT|REPLY,from_email,
                 to_email,subject,body_html,preview,sent_at,seq_number}] }
       POST {API_BASE}/api/reply
-           body: { "conversation_id": "...", "body": "plain text reply" }
+           body: { "conversation_id": "...", "body": "plain text reply",
+                   "body_html": "<optional rich html>",
+                   "cc": "a@b.com,c@d.com", "bcc": "..." }
            -> { ok:true } — sends a real email into the thread from the same
            mailbox that ran the campaign. Requires can_reply=true for the
            signed-in user. Every send is audit-logged with the sender's email.
+      POST {API_BASE}/api/category
+           body: { "conversation_id": "...", "category_id": 1 }
+           -> { ok:true, category:"Interested" } — sets the lead's category in
+           SmartLead (ids come from `categories` in the inbox payload).
+           Requires can_reply=true; audit-logged with the setter's email.
     API_BASE is the value of window.INBOX_API_BASE.
   - The current page state is mirrored as JSON in <script id="inbox-data">.
   - DOM conventions: conversation rows are [role="listitem"] elements carrying
@@ -165,6 +172,13 @@
   .thread-head .campaign-line { font-size: 12px; color: #7c8698; margin-top: 3px; }
   .thread-head .campaign-line b { color: #4f46e5; font-weight: 600; }
   .back { display: none; border: 1px solid #d8dee8; background: #fff; border-radius: 9px; padding: 6px 11px; font-size: 13px; cursor: pointer; color: #334155; }
+  .tagbox { display: flex; align-items: center; gap: 6px; }
+  .tagbox select { border: 1px solid #d8dee8; border-radius: 99px; padding: 3px 9px; font-size: 11px; font-weight: 600; background: #fff; color: #475569; cursor: pointer; max-width: 190px; }
+  .tagbox select:focus { outline: none; border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(99, 102, 241, .15); }
+  .tagbox select.untagged { border-color: #fbbf24; background: #fffbeb; color: #b45309; }
+  .tagbox .tagstate { font-size: 11px; color: #94a3b8; }
+  .tagbox .tagstate.ok { color: #16a34a; font-weight: 600; }
+  .tagbox .tagstate.err { color: #dc2626; }
   .msgs { flex: 1; overflow-y: auto; padding: 20px 24px; }
   .msg {
     background: #fff; border: 1px solid #e7eaf0; border-radius: 14px; margin-bottom: 14px;
@@ -589,10 +603,22 @@ function renderStats() {
   if (agg.bounce_count > 0) wrap.appendChild(statTile('bounces', agg.bounce_count, 'Bounced'));
 }
 
+// Untagged (or AI-uncategorised) conversations a human still has to triage.
+function isUntagged(c) {
+  var s = (c.lead_category || '').toLowerCase();
+  return !s || s.indexOf('uncategoriz') >= 0;
+}
+
+// Waiting on us: a positive lead whose last message is theirs.
+function needsReply(c) {
+  return c.last_direction === 'REPLY' && isPositive(c.lead_category);
+}
+
 function matchesFilter(c) {
   var f = state.filter;
   if (f === 'all') return true;
-  if (f === 'needs_reply') return c.last_direction === 'REPLY';
+  if (f === 'to_process') return isUntagged(c);
+  if (f === 'needs_reply') return needsReply(c);
   if (f === 'positive') return isPositive(c.lead_category);
   if (f.indexOf('cat:') === 0) return (c.lead_category || '') === f.slice(4);
   return true;
@@ -601,11 +627,17 @@ function matchesFilter(c) {
 function renderFilters(base) {
   var wrap = document.getElementById('filters');
   wrap.innerHTML = '';
-  var needs = base.filter(function (c) { return c.last_direction === 'REPLY'; }).length;
+  var toProcess = base.filter(isUntagged).length;
+  var needs = base.filter(needsReply).length;
   var pos = base.filter(function (c) { return isPositive(c.lead_category); }).length;
   var cats = {};
   base.forEach(function (c) { if (c.lead_category) cats[c.lead_category] = (cats[c.lead_category] || 0) + 1; });
-  var defs = [['all', 'All', base.length], ['needs_reply', 'Needs reply', needs], ['positive', 'Positive', pos]];
+  var defs = [
+    ['all', 'All', base.length],
+    ['to_process', 'To process', toProcess],
+    ['needs_reply', 'Needs reply', needs],
+    ['positive', 'Positive', pos]
+  ];
   Object.keys(cats).sort().forEach(function (k) { defs.push(['cat:' + k, k, cats[k]]); });
   defs.forEach(function (d) {
     if (d[0] !== 'all' && !d[2] && state.filter !== d[0]) return;
@@ -702,7 +734,62 @@ function renderThread(d) {
   top.appendChild(back);
   top.appendChild(el('h2', null, d.conversation.lead_name || d.conversation.lead_email));
   top.appendChild(el('span', 'email', d.conversation.lead_email));
-  if (d.conversation.lead_category) top.appendChild(el('span', 'badge ' + (catCls(d.conversation.lead_category) || ''), d.conversation.lead_category));
+  var cats = (state.data && state.data.categories) || [];
+  var canTag = state.data && state.data.client && state.data.client.can_reply && cats.length;
+  if (canTag) {
+    var tagBox = el('div', 'tagbox');
+    var tagSel = document.createElement('select');
+    tagSel.title = 'Tag this conversation (updates SmartLead too)';
+    var blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = 'Not tagged yet — set a tag';
+    tagSel.appendChild(blank);
+    cats.forEach(function (cat) {
+      var o = document.createElement('option');
+      o.value = String(cat.id);
+      o.textContent = cat.name;
+      tagSel.appendChild(o);
+    });
+    var current = cats.filter(function (cat) { return cat.name === d.conversation.lead_category; })[0];
+    tagSel.value = current ? String(current.id) : '';
+    if (!current) tagSel.className = 'untagged';
+    var tagState = el('span', 'tagstate', '');
+    tagSel.onchange = function () {
+      if (!tagSel.value) return;
+      var prev = d.conversation.lead_category;
+      tagSel.disabled = true;
+      tagState.className = 'tagstate';
+      tagState.textContent = 'Saving…';
+      api('/api/category', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversation_id: d.conversation.id, category_id: Number(tagSel.value) })
+      }).then(function (j) {
+        tagSel.disabled = false;
+        tagSel.className = '';
+        tagState.className = 'tagstate ok';
+        tagState.textContent = 'Tagged ✓';
+        d.conversation.lead_category = j.category;
+        // Reflect it in the list + filter counts without a full reload.
+        (state.data.conversations || []).forEach(function (cv) {
+          if (cv.id === d.conversation.id) cv.lead_category = j.category;
+        });
+        renderList();
+        setTimeout(function () { tagState.textContent = ''; }, 2500);
+      }).catch(function (e) {
+        tagSel.disabled = false;
+        tagSel.value = current ? String(current.id) : '';
+        d.conversation.lead_category = prev;
+        tagState.className = 'tagstate err';
+        tagState.textContent = 'Failed: ' + ((e.body && e.body.error) || 'error');
+      });
+    };
+    tagBox.appendChild(tagSel);
+    tagBox.appendChild(tagState);
+    top.appendChild(tagBox);
+  } else if (d.conversation.lead_category) {
+    top.appendChild(el('span', 'badge ' + (catCls(d.conversation.lead_category) || ''), d.conversation.lead_category));
+  }
   head.appendChild(top);
   if (d.conversation.subject) head.appendChild(el('div', 'subject', 'Subject: ' + d.conversation.subject));
   var cl = el('div', 'campaign-line');
