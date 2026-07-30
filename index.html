@@ -5,39 +5,41 @@
   Machine-readable integration notes (for AI agents and scripts):
   - Authentication: Supabase Auth email OTP. Sign in with the supabase-js SDK
     against window.INBOX_SUPABASE_URL using window.INBOX_SUPABASE_ANON_KEY:
-      signInWithOtp({ email }) then click the emailed link or
-      verifyOtp({ email, token, type: 'email' }).
+      signInWithOtp({ email, options:{ emailRedirectTo: <this page url> } })
+      then click the emailed link, or verifyOtp({ email, token, type:'email' }).
     Access is whitelist-based: only emails registered by the agency get data.
   - Data source (JSON API). All calls require the header
     "Authorization: Bearer <supabase_access_token>":
       GET  {API_BASE}/api/inbox
-           -> { client:{name,can_reply,user_email},
+           -> { client:{name,logo_url,can_reply,user_email,is_admin?,clients?},
                 campaigns:[{id,name,status,stats,last_synced_at}],
                 conversations:[{id,campaign_id,lead_email,lead_name,lead_category,
-                                subject,last_message_at,last_message_preview,
-                                message_count,reply_count}] }
+                                subject,last_message_at,last_direction,
+                                last_message_preview,message_count,reply_count}],
+                categories:[{id,name,sentiment}] }
       GET  {API_BASE}/api/thread?id={CONVERSATION_ID}
            -> { conversation:{...}, messages:[{direction:SENT|REPLY,from_email,
                 to_email,subject,body_html,preview,sent_at,seq_number}] }
+      GET  {API_BASE}/api/drill?status={bounced|opened|clicked|unsubscribed|replied|all}
+                              [&campaign_id={id}]
+           -> { status, items:[{lead_email,lead_name,campaign_id,campaign_name,
+                subject,sent_time,open_time,reply_time,open_count}], truncated }
       POST {API_BASE}/api/reply
-           body: { "conversation_id": "...", "body": "plain text reply",
-                   "body_html": "<optional rich html>",
-                   "cc": "a@b.com,c@d.com", "bcc": "..." }
+           body: { conversation_id, body, body_html?, cc?, bcc? }
            -> { ok:true } — sends a real email into the thread from the same
-           mailbox that ran the campaign. Requires can_reply=true for the
-           signed-in user. Every send is audit-logged with the sender's email.
+           mailbox that ran the campaign. Requires can_reply=true.
       POST {API_BASE}/api/category
-           body: { "conversation_id": "...", "category_id": 1 }
-           -> { ok:true, category:"Interested" } — sets the lead's category in
-           SmartLead (ids come from `categories` in the inbox payload).
-           Requires can_reply=true; audit-logged with the setter's email.
-    API_BASE is the value of window.INBOX_API_BASE.
-  - The current page state is mirrored as JSON in <script id="inbox-data">.
-  - DOM conventions: conversation rows are [role="listitem"] elements carrying
-    data-conversation-id, data-lead-email, data-lead-name, data-category,
-    data-campaign-id, data-campaign-name, data-last-message-at, data-reply-count.
-    Stat tiles carry data-stat / data-value. Thread messages carry
-    data-direction, data-from, data-to, data-sent-at.
+           body: { conversation_id, category_id }
+           -> { ok:true, category } — writes the tag through to SmartLead.
+    API_BASE is the value of window.INBOX_API_BASE. Admins may append
+    &client_id=<uuid> to inbox/thread/drill to view another client.
+  - Current page state is mirrored as JSON in <script id="inbox-data">.
+  - DOM conventions: conversation rows are [role="listitem"] with
+    data-conversation-id / data-lead-email / data-lead-name / data-category /
+    data-campaign-id / data-campaign-name / data-last-message-at /
+    data-reply-count / data-last-direction. Stat tiles carry data-stat and
+    data-value. Thread messages carry data-direction / data-from / data-to /
+    data-sent-at.
 -->
 <html lang="en">
 <head>
@@ -50,108 +52,129 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
+  :root {
+    --ink: #0f172a; --ink-2: #334155; --ink-3: #64748b; --ink-4: #94a3b8;
+    --line: #e7eaf0; --line-2: #f0f2f7; --surface: #fff; --bg: #f6f7f9;
+    --brand: #4f46e5; --brand-2: #4338ca; --brand-soft: #eef2ff; --brand-line: #dcdefc;
+    --shadow-sm: 0 1px 2px rgba(15,23,42,.04);
+    --shadow-md: 0 4px 14px rgba(15,23,42,.08);
+    --shadow-lg: 0 18px 50px rgba(15,23,42,.18);
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
   body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    background: #f6f7f9; color: #0f172a;
+    background: var(--bg); color: var(--ink);
     -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
   }
   ::-webkit-scrollbar { width: 10px; height: 10px; }
-  ::-webkit-scrollbar-thumb { background: #d3d9e2; border-radius: 99px; border: 2px solid #f6f7f9; }
+  ::-webkit-scrollbar-thumb { background: #d3d9e2; border-radius: 99px; border: 2px solid var(--bg); }
   ::-webkit-scrollbar-thumb:hover { background: #b9c2cf; }
   ::-webkit-scrollbar-track { background: transparent; }
-  button { font-family: inherit; }
-  input, textarea, select { font-family: inherit; }
+  button, input, textarea, select { font-family: inherit; }
+  button { cursor: pointer; }
 
+  /* ---------- shell ---------- */
   #app { display: none; flex-direction: column; height: 100%; }
-  header { background: #fff; border-bottom: 1px solid #e7eaf0; padding: 12px 22px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  header {
+    background: var(--surface); border-bottom: 1px solid var(--line);
+    padding: 11px 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 11px; margin-right: auto; min-width: 0; }
   .logo {
-    width: 40px; height: 40px; border-radius: 12px; flex: none;
-    background: linear-gradient(135deg, #6366f1 0%, #4f46e5 55%, #4338ca 100%);
+    width: 40px; height: 40px; border-radius: 11px; flex: none;
+    background: linear-gradient(135deg, #6366f1 0%, var(--brand) 55%, var(--brand-2) 100%);
     color: #fff; display: flex; align-items: center; justify-content: center;
-    font-weight: 700; font-size: 17px;
-    box-shadow: 0 2px 6px rgba(79, 70, 229, .35);
+    font-weight: 700; font-size: 17px; box-shadow: 0 2px 6px rgba(79,70,229,.32);
+    overflow: hidden;
   }
-  .brand { display: flex; align-items: center; gap: 12px; margin-right: auto; }
-  .brand h1 { font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em; }
-  .brand .sub { font-size: 10px; font-weight: 600; color: #8a94a6; letter-spacing: .08em; text-transform: uppercase; margin-top: 1px; }
+  .logo.has-img { background: #fff; box-shadow: none; border: 1px solid var(--line); }
+  .logo img { width: 100%; height: 100%; object-fit: contain; display: block; padding: 3px; }
+  .brand h1 { font-size: 15.5px; font-weight: 700; letter-spacing: -0.015em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .brand .sub { font-size: 9.5px; font-weight: 600; color: var(--ink-4); letter-spacing: .09em; text-transform: uppercase; margin-top: 2px; }
   .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .controls select, .controls input {
+  .ctl {
     border: 1px solid #d8dee8; border-radius: 9px; padding: 8px 11px; font-size: 13px;
-    background: #fff; color: #0f172a; max-width: 280px;
-    transition: border-color .15s, box-shadow .15s;
+    background: var(--surface); color: var(--ink); max-width: 280px;
+    transition: border-color .15s, box-shadow .15s, background .15s;
   }
-  .controls input { width: 220px; }
-  .controls select:focus, .controls input:focus { outline: none; border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(99, 102, 241, .15); }
-  .controls button {
-    border: 1px solid #d8dee8; background: #fff; border-radius: 9px; padding: 8px 13px;
-    font-size: 13px; font-weight: 500; cursor: pointer; color: #334155;
+  .ctl:focus { outline: none; border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(99,102,241,.15); }
+  #search { width: 230px; }
+  .btn {
+    border: 1px solid #d8dee8; background: var(--surface); border-radius: 9px;
+    padding: 8px 13px; font-size: 13px; font-weight: 500; color: var(--ink-2);
     transition: background .15s, border-color .15s;
   }
-  .controls button:hover { background: #f4f6fa; border-color: #c4ccda; }
-  .whoami { font-size: 11.5px; color: #8a94a6; }
+  .btn:hover { background: #f4f6fa; border-color: #c4ccda; }
+  .btn:disabled { opacity: .6; cursor: default; }
+  .btn.busy { color: var(--brand); border-color: var(--brand-line); background: var(--brand-soft); }
+  .spin {
+    display: inline-block; width: 11px; height: 11px; margin-right: 6px; vertical-align: -1px;
+    border: 2px solid currentColor; border-right-color: transparent; border-radius: 99px;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .whoami { font-size: 11.5px; color: var(--ink-4); max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  #statsBar { background: #fff; border-bottom: 1px solid #e7eaf0; padding: 14px 22px 16px; display: none; }
-  #campaignContext { font-size: 12px; color: #64748b; margin-bottom: 11px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  #campaignContext .cname { font-weight: 700; color: #0f172a; font-size: 12.5px; letter-spacing: -0.01em; }
+  /* ---------- stats ---------- */
+  #statsBar { background: var(--surface); border-bottom: 1px solid var(--line); padding: 13px 20px 15px; display: none; }
+  #campaignContext { font-size: 12px; color: var(--ink-3); margin-bottom: 11px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #campaignContext .cname { font-weight: 700; color: var(--ink); font-size: 12.5px; letter-spacing: -0.01em; }
   #campaignContext .dot { color: #cbd5e1; }
   .statuschip { font-size: 9.5px; font-weight: 700; letter-spacing: .06em; padding: 2.5px 8px; border-radius: 99px; background: #dcfce7; color: #15803d; }
-  .statuschip.inactive { background: #eef1f6; color: #64748b; }
-  #stats { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 2px; }
+  .statuschip.inactive { background: #eef1f6; color: var(--ink-3); }
+  #stats { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 3px; }
   .stat {
-    flex: none; min-width: 128px; border: 1px solid #e7eaf0; border-radius: 12px;
-    padding: 11px 15px 10px; background: #fff;
-    transition: box-shadow .15s, border-color .15s;
+    flex: none; min-width: 132px; border: 1px solid var(--line); border-radius: 12px;
+    padding: 11px 15px 10px; background: var(--surface); text-align: left;
+    transition: box-shadow .15s, border-color .15s, transform .12s;
   }
-  .stat:hover { box-shadow: 0 2px 8px rgba(15, 23, 42, .06); }
-  .stat .v { font-size: 20px; font-weight: 700; color: #0f172a; line-height: 1.15; letter-spacing: -0.02em; }
-  .stat .l { font-size: 11px; font-weight: 500; color: #64748b; margin-top: 3px; display: flex; align-items: center; gap: 5px; }
+  .stat .v { font-size: 20px; font-weight: 700; color: var(--ink); line-height: 1.15; letter-spacing: -0.02em; }
+  .stat .l { font-size: 11px; font-weight: 500; color: var(--ink-3); margin-top: 3px; display: flex; align-items: center; gap: 5px; }
   .stat .l::before { content: ''; width: 6px; height: 6px; border-radius: 99px; background: #cbd5e1; flex: none; }
-  .stat .s { font-size: 10.5px; color: #94a3b8; margin-top: 2px; }
-  .stat.hl { background: #f5f6ff; border-color: #dcdefc; }
-  .stat.hl .l { color: #4f46e5; } .stat.hl .l::before { background: #4f46e5; }
+  .stat .s { font-size: 10.5px; color: var(--ink-4); margin-top: 2px; }
+  .stat.hl { background: #f5f6ff; border-color: var(--brand-line); }
+  .stat.hl .l { color: var(--brand); } .stat.hl .l::before { background: var(--brand); }
   .stat.good { background: #f4fcf7; border-color: #d3f0de; }
   .stat.good .l { color: #16a34a; } .stat.good .l::before { background: #22c55e; }
+  .stat.warn { background: #fffbf5; border-color: #fde9c8; }
+  .stat.warn .l { color: #b45309; } .stat.warn .l::before { background: #f59e0b; }
+  .stat.tap { cursor: pointer; }
+  .stat.tap:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+  .stat.tap .s::after { content: ' · view'; color: var(--brand); font-weight: 600; }
 
+  /* ---------- list ---------- */
   main { flex: 1; display: flex; min-height: 0; }
-  aside { width: 390px; flex: none; background: #fff; border-right: 1px solid #e7eaf0; overflow-y: auto; }
-  .listhead { position: sticky; top: 0; background: #fff; z-index: 1; border-bottom: 1px solid #f0f2f7; }
-  .count {
-    padding: 10px 18px 6px; font-size: 10.5px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase;
-    color: #8a94a6;
-  }
+  aside { width: 392px; flex: none; background: var(--surface); border-right: 1px solid var(--line); overflow-y: auto; }
+  .listhead { position: sticky; top: 0; background: var(--surface); z-index: 2; border-bottom: 1px solid var(--line-2); }
+  .count { padding: 11px 18px 6px; font-size: 10.5px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-4); }
   .filters { display: flex; gap: 6px; padding: 2px 14px 10px; overflow-x: auto; scrollbar-width: none; }
   .filters::-webkit-scrollbar { display: none; }
   .fchip {
-    font-size: 11px; font-weight: 600; padding: 4px 11px; border-radius: 99px;
-    border: 1px solid #e2e6ee; background: #fff; color: #475569; cursor: pointer;
-    white-space: nowrap; flex: none; transition: background .12s, border-color .12s;
+    font-size: 11px; font-weight: 600; padding: 4.5px 11px; border-radius: 99px;
+    border: 1px solid #e2e6ee; background: var(--surface); color: #475569;
+    white-space: nowrap; flex: none; transition: background .12s, border-color .12s, color .12s;
   }
   .fchip:hover { background: #f4f6fa; }
-  .fchip.on { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+  .fchip.on { background: var(--brand); border-color: var(--brand); color: #fff; }
   .item {
-    padding: 13px 16px 13px 18px; border-bottom: 1px solid #f0f2f7; cursor: pointer;
-    display: flex; gap: 12px; position: relative;
-    transition: background .12s;
+    padding: 13px 16px 13px 18px; border-bottom: 1px solid var(--line-2);
+    cursor: pointer; display: flex; gap: 12px; position: relative; transition: background .12s;
   }
   .item:hover { background: #f8f9fc; }
   .item.active { background: #f3f4ff; }
-  .item.active::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: #4f46e5; }
-  .avatar {
-    width: 40px; height: 40px; border-radius: 99px; display: flex; align-items: center; justify-content: center;
-    font-weight: 600; font-size: 13px; flex: none;
-  }
+  .item.active::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--brand); }
+  .avatar { width: 40px; height: 40px; border-radius: 99px; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 13px; flex: none; }
   .item .meta { min-width: 0; flex: 1; }
   .row1 { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
   .row1 .name { font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .row1 .time { font-size: 11px; color: #94a3b8; flex: none; }
-  .subj { font-size: 12.5px; color: #334155; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2.5px; }
+  .row1 .time { font-size: 11px; color: var(--ink-4); flex: none; }
+  .subj { font-size: 12.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2.5px; }
   .prev { font-size: 12px; color: #7c8698; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
   .badges { margin-top: 7px; display: flex; gap: 5px; flex-wrap: wrap; }
   .badge {
     font-size: 10.5px; font-weight: 600; padding: 2.5px 9px; border-radius: 99px;
-    background: #eef1f6; color: #475569; max-width: 220px;
+    background: #eef1f6; color: #475569; max-width: 210px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .badge.green { background: #dcfce7; color: #15803d; }
@@ -159,45 +182,43 @@
   .badge.red { background: #fee2e2; color: #b91c1c; }
   .badge.purple { background: #f3e8ff; color: #7e22ce; }
   .badge.blue { background: #dbeafe; color: #1d4ed8; }
-  .badge.campaign { background: transparent; color: #6068d9; border: 1px solid #dcdefc; }
+  .badge.campaign { background: transparent; color: #6068d9; border: 1px solid var(--brand-line); }
+  .badge.wait { background: #fff7ed; color: #c2410c; }
 
+  /* ---------- thread ---------- */
   section { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
-  .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #94a3b8; font-size: 13.5px; gap: 10px; padding: 20px; text-align: center; }
-  .empty .big { font-size: 40px; opacity: .8; }
-  .thread-head { background: #fff; border-bottom: 1px solid #e7eaf0; padding: 15px 24px; }
+  .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--ink-4); font-size: 13.5px; gap: 10px; padding: 20px; text-align: center; }
+  .empty .big { font-size: 40px; opacity: .85; }
+  .thread-head { background: var(--surface); border-bottom: 1px solid var(--line); padding: 14px 22px; }
   .thread-head .top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .thread-head h2 { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+  .thread-head h2 { font-size: 15px; font-weight: 700; letter-spacing: -0.015em; }
   .thread-head .email { font-size: 12.5px; color: #7c8698; }
-  .thread-head .subject { font-size: 13px; color: #334155; margin-top: 6px; }
-  .thread-head .campaign-line { font-size: 12px; color: #7c8698; margin-top: 3px; }
-  .thread-head .campaign-line b { color: #4f46e5; font-weight: 600; }
-  .back { display: none; border: 1px solid #d8dee8; background: #fff; border-radius: 9px; padding: 6px 11px; font-size: 13px; cursor: pointer; color: #334155; }
+  .thread-head .meta2 { font-size: 12px; color: var(--ink-3); margin-top: 6px; display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+  .thread-head .meta2 b { color: var(--brand); font-weight: 600; }
+  .back { display: none; border: 1px solid #d8dee8; background: var(--surface); border-radius: 9px; padding: 6px 11px; font-size: 13px; color: var(--ink-2); }
   .tagbox { display: flex; align-items: center; gap: 6px; }
-  .tagbox select { border: 1px solid #d8dee8; border-radius: 99px; padding: 3px 9px; font-size: 11px; font-weight: 600; background: #fff; color: #475569; cursor: pointer; max-width: 190px; }
-  .tagbox select:focus { outline: none; border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(99, 102, 241, .15); }
+  .tagbox select { border: 1px solid #d8dee8; border-radius: 99px; padding: 4px 10px; font-size: 11px; font-weight: 600; background: var(--surface); color: #475569; max-width: 200px; }
+  .tagbox select:focus { outline: none; border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(99,102,241,.15); }
   .tagbox select.untagged { border-color: #fbbf24; background: #fffbeb; color: #b45309; }
-  .tagbox .tagstate { font-size: 11px; color: #94a3b8; }
+  .tagbox .tagstate { font-size: 11px; color: var(--ink-4); }
   .tagbox .tagstate.ok { color: #16a34a; font-weight: 600; }
   .tagbox .tagstate.err { color: #dc2626; }
-  .msgs { flex: 1; overflow-y: auto; padding: 20px 24px; }
-  .msg {
-    background: #fff; border: 1px solid #e7eaf0; border-radius: 14px; margin-bottom: 14px;
-    max-width: 880px; overflow: hidden; box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
-  }
-  .msg.reply { border-left: 3px solid #4f46e5; }
-  .msg-head { padding: 11px 16px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; border-bottom: 1px solid #f0f2f7; }
+  .msgs { flex: 1; overflow-y: auto; padding: 18px 22px 22px; }
+  .msg { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; margin-bottom: 13px; max-width: 900px; overflow: hidden; box-shadow: var(--shadow-sm); }
+  .msg.reply { border-left: 3px solid var(--brand); }
+  .msg-head { padding: 10px 15px; display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; border-bottom: 1px solid var(--line-2); }
   .dir { font-size: 9.5px; font-weight: 700; letter-spacing: .06em; padding: 3px 9px; border-radius: 99px; }
-  .dir.sent { background: #eef1f6; color: #64748b; }
-  .dir.reply { background: #e0e7ff; color: #4338ca; }
-  .msg-head .from { font-size: 12.5px; font-weight: 600; color: #334155; word-break: break-all; }
-  .msg-head .when { font-size: 11px; color: #94a3b8; margin-left: auto; flex: none; }
+  .dir.sent { background: #eef1f6; color: var(--ink-3); }
+  .dir.reply { background: #e0e7ff; color: var(--brand-2); }
+  .msg-head .from { font-size: 12.5px; font-weight: 600; color: var(--ink-2); word-break: break-all; }
+  .msg-head .when { font-size: 11px; color: var(--ink-4); margin-left: auto; flex: none; }
   .msg iframe { width: 100%; border: 0; display: block; }
-  .collapsed-body { padding: 12px 16px; font-size: 12.5px; color: #7c8698; cursor: pointer; background: #fafbfd; }
-  .collapsed-body span { color: #4f46e5; font-weight: 600; }
+  .collapsed-body { padding: 12px 15px; font-size: 12.5px; color: #7c8698; cursor: pointer; background: #fafbfd; }
+  .collapsed-body span { color: var(--brand); font-weight: 600; }
   .collapsed-body:hover span { text-decoration: underline; }
-  .spinner { padding: 32px; text-align: center; color: #94a3b8; font-size: 13px; }
+  .spinner { padding: 30px; text-align: center; color: var(--ink-4); font-size: 13px; }
 
-  .skel { padding: 14px 18px; border-bottom: 1px solid #f0f2f7; display: flex; gap: 12px; }
+  .skel { padding: 14px 18px; border-bottom: 1px solid var(--line-2); display: flex; gap: 12px; }
   .skel .c { width: 40px; height: 40px; border-radius: 99px; flex: none; }
   .skel .lines { flex: 1; }
   .skel .b { height: 11px; border-radius: 6px; margin-bottom: 8px; }
@@ -207,123 +228,163 @@
   }
   @keyframes shimmer { from { background-position: -400px 0; } to { background-position: 400px 0; } }
 
-  .composer { background: #fff; border-top: 1px solid #e7eaf0; padding: 14px 24px; }
-  .composer textarea {
-    width: 100%; max-width: 880px; min-height: 76px; border: 1px solid #d8dee8; border-radius: 12px;
-    padding: 11px 13px; font-size: 13.5px; line-height: 1.55; color: #0f172a; resize: vertical; display: block;
-    transition: border-color .15s, box-shadow .15s;
+  /* ---------- composer ---------- */
+  .composer { background: var(--surface); border-top: 1px solid var(--line); padding: 12px 22px 14px; }
+  .composer.expanded { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; padding: 16px 22px; }
+  .composer.expanded .editor { flex: 1; max-height: none; }
+  section { position: relative; }
+  .toolbar { display: flex; gap: 5px; align-items: center; margin-bottom: 8px; max-width: 900px; flex-wrap: wrap; }
+  .tbtn {
+    border: 1px solid #d8dee8; background: var(--surface); border-radius: 7px;
+    min-width: 30px; height: 28px; padding: 0 7px; font-size: 12.5px; color: var(--ink-2);
+    line-height: 1; transition: background .12s, border-color .12s;
   }
-  .composer textarea:focus { outline: none; border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(99, 102, 241, .15); }
-  .composer .row { display: flex; align-items: center; gap: 10px; margin-top: 9px; max-width: 880px; flex-wrap: wrap; }
-  .composer .row button {
-    background: #4f46e5; border: 0; color: #fff; border-radius: 10px; padding: 9px 18px;
-    font-size: 13px; font-weight: 600; cursor: pointer;
-    box-shadow: 0 1px 3px rgba(79, 70, 229, .35); transition: background .15s;
-  }
-  .composer .row button:hover { background: #4338ca; }
-  .composer .row button:disabled { opacity: .5; cursor: default; }
-  .composer .hint { font-size: 11.5px; color: #94a3b8; }
-  .composer .status { font-size: 12px; margin-left: auto; }
-  .composer .status.ok { color: #16a34a; font-weight: 600; }
-  .composer .status.err { color: #dc2626; }
-  .composer .toolbar { display: flex; gap: 5px; align-items: center; margin-bottom: 7px; max-width: 880px; }
-  .tbtn { border: 1px solid #d8dee8; background: #fff; border-radius: 7px; width: 30px; height: 27px; font-size: 12.5px; cursor: pointer; color: #334155; line-height: 1; }
-  .tbtn:hover { background: #f4f6fa; }
-  .swatch { width: 17px; height: 17px; border-radius: 99px; border: 2px solid #fff; box-shadow: 0 0 0 1px #d8dee8; cursor: pointer; padding: 0; }
-  .cclink { font-size: 11.5px; color: #4f46e5; cursor: pointer; font-weight: 600; margin-left: auto; }
+  .tbtn:hover { background: #f4f6fa; border-color: #c4ccda; }
+  .tsep { width: 1px; height: 18px; background: var(--line); margin: 0 3px; flex: none; }
+  .swatch { width: 18px; height: 18px; border-radius: 99px; border: 2px solid #fff; box-shadow: 0 0 0 1px #d8dee8; padding: 0; flex: none; }
+  .swatch:hover { box-shadow: 0 0 0 2px #a5b4fc; }
+  .swatch.hi { border-radius: 5px; }
+  .cclink { font-size: 11.5px; color: var(--brand); font-weight: 600; background: none; border: 0; padding: 4px 2px; }
   .cclink:hover { text-decoration: underline; }
-  .editor { max-width: 880px; min-height: 84px; max-height: 260px; overflow-y: auto; border: 1px solid #d8dee8; border-radius: 12px; padding: 10px 13px; font-size: 13.5px; line-height: 1.55; background: #fff; color: #0f172a; }
+  .toolbar .right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+  .editor {
+    max-width: 900px; min-height: 190px; max-height: 42vh; overflow-y: auto;
+    border: 1px solid #d8dee8; border-radius: 12px; padding: 13px 15px;
+    font-size: 13.5px; line-height: 1.6; background: var(--surface); color: var(--ink);
+  }
   .editor:empty::before { content: attr(data-placeholder); color: #9ca3af; pointer-events: none; }
-  .editor:focus { outline: none; border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(99, 102, 241, .15); }
-  .cc-row { display: none; gap: 8px; margin-top: 8px; max-width: 880px; flex-wrap: wrap; }
-  .cc-row input { flex: 1; min-width: 220px; border: 1px solid #d8dee8; border-radius: 8px; padding: 7px 10px; font-size: 12.5px; color: #0f172a; }
+  .editor:focus { outline: none; border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(99,102,241,.15); }
+  .editor a { color: var(--brand); }
+  .editor ul, .editor ol { padding-left: 22px; margin: 6px 0; }
+  .cc-row { display: none; gap: 8px; margin-top: 8px; max-width: 900px; flex-wrap: wrap; }
+  .cc-row input { flex: 1; min-width: 220px; border: 1px solid #d8dee8; border-radius: 8px; padding: 8px 11px; font-size: 12.5px; color: var(--ink); }
   .cc-row input:focus { outline: none; border-color: #a5b4fc; }
+  .link-row { display: none; gap: 8px; margin-top: 8px; max-width: 900px; align-items: center; flex-wrap: wrap; }
+  .link-row input { flex: 1; min-width: 240px; border: 1px solid #d8dee8; border-radius: 8px; padding: 8px 11px; font-size: 12.5px; }
+  .link-row input:focus { outline: none; border-color: #a5b4fc; }
+  .send-row { display: flex; align-items: center; gap: 11px; margin-top: 10px; max-width: 900px; flex-wrap: wrap; }
+  .send {
+    background: var(--brand); border: 0; color: #fff; border-radius: 10px; padding: 10px 20px;
+    font-size: 13px; font-weight: 600; box-shadow: 0 1px 3px rgba(79,70,229,.32); transition: background .15s;
+  }
+  .send:hover { background: var(--brand-2); }
+  .send:disabled { opacity: .5; cursor: default; }
+  .hint { font-size: 11.5px; color: var(--ink-4); }
+  .sendstate { font-size: 12px; margin-left: auto; }
+  .sendstate.ok { color: #16a34a; font-weight: 600; }
+  .sendstate.err { color: #dc2626; }
 
-  #gate {
-    min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 24px;
-    background:
-      radial-gradient(700px 340px at 15% 0%, rgba(99, 102, 241, .10), transparent 65%),
-      radial-gradient(700px 340px at 85% 100%, rgba(79, 70, 229, .08), transparent 65%),
-      #f6f7f9;
+  /* ---------- drill modal ---------- */
+  #drill { display: none; position: fixed; inset: 0; z-index: 60; }
+  #drill .backdrop { position: absolute; inset: 0; background: rgba(15,23,42,.42); }
+  #drill .sheet {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: min(860px, 94vw); max-height: 86vh; background: var(--surface);
+    border-radius: 16px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden;
   }
-  .card {
-    background: #fff; border: 1px solid #e7eaf0; border-radius: 20px; padding: 36px 32px;
-    width: 100%; max-width: 404px; box-shadow: 0 12px 40px rgba(15, 23, 42, .08);
+  #drill .dhead { padding: 15px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  #drill .dhead h3 { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+  #drill .dhead .dsub { font-size: 12px; color: var(--ink-3); }
+  #drill .dclose { margin-left: auto; border: 1px solid #d8dee8; background: var(--surface); border-radius: 8px; width: 30px; height: 28px; font-size: 15px; line-height: 1; color: var(--ink-3); }
+  #drill .dbody { overflow: auto; padding: 4px 0 8px; }
+  #drill table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  #drill th {
+    text-align: left; padding: 9px 20px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--ink-4); font-weight: 600; border-bottom: 1px solid var(--line-2);
+    position: sticky; top: 0; background: var(--surface);
   }
-  .card .logo { margin: 0 auto 16px; width: 52px; height: 52px; font-size: 22px; border-radius: 15px; }
-  .card h1 { font-size: 19px; font-weight: 800; text-align: center; letter-spacing: -0.02em; }
-  .card .sub2 { font-size: 13px; color: #64748b; text-align: center; margin-top: 5px; margin-bottom: 22px; line-height: 1.5; }
-  .card label { display: block; font-size: 11.5px; font-weight: 600; color: #334155; margin-bottom: 6px; }
-  .card input {
-    width: 100%; border: 1px solid #d8dee8; border-radius: 11px; padding: 11px 13px; font-size: 14px; color: #0f172a;
-    transition: border-color .15s, box-shadow .15s;
-  }
-  .card input:focus { outline: none; border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(99, 102, 241, .15); }
-  .card .primary {
-    width: 100%; margin-top: 13px; background: #4f46e5; border: 0; color: #fff; border-radius: 11px;
-    padding: 12px; font-size: 14px; font-weight: 600; cursor: pointer;
-    box-shadow: 0 2px 8px rgba(79, 70, 229, .35); transition: background .15s;
-  }
-  .card .primary:hover { background: #4338ca; }
-  .card .primary:disabled { opacity: .5; cursor: default; }
-  .card .msg { border: 0; font-size: 12.5px; margin-top: 13px; text-align: center; line-height: 1.55; }
-  .card .msg.info { color: #4338ca; }
-  .card .msg.err { color: #dc2626; }
-  .card .alt { margin-top: 16px; font-size: 12px; color: #94a3b8; text-align: center; }
-  .card .alt a { color: #4f46e5; cursor: pointer; text-decoration: none; font-weight: 600; }
-  .card .foot { margin-top: 22px; padding-top: 16px; border-top: 1px solid #f0f2f7; font-size: 11px; color: #94a3b8; text-align: center; line-height: 1.5; }
-  #codeRow { display: none; margin-top: 14px; }
+  #drill td { padding: 10px 20px; border-bottom: 1px solid var(--line-2); color: var(--ink-2); vertical-align: top; }
+  #drill tr.linked { cursor: pointer; }
+  #drill tr.linked:hover td { background: #f8f9fc; }
+  #drill td .em { color: var(--ink-3); font-size: 11.5px; word-break: break-all; }
+  #drill .dnote { padding: 10px 20px; font-size: 11.5px; color: var(--ink-4); border-top: 1px solid var(--line-2); }
 
-  #adminWrap { display: none; flex: 1; overflow-y: auto; padding: 20px 24px; background: #f6f7f9; }
-  .admin-head { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
-  .admin-head h2 { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
-  .admin-head button { border: 1px solid #d8dee8; background: #fff; border-radius: 9px; padding: 7px 12px; font-size: 13px; cursor: pointer; color: #334155; }
+  /* ---------- admin ---------- */
+  #adminWrap { display: none; flex: 1; overflow-y: auto; padding: 18px 20px 26px; background: var(--bg); }
+  .admin-head { display: flex; align-items: center; gap: 13px; margin-bottom: 15px; }
+  .admin-head h2 { font-size: 16px; font-weight: 700; letter-spacing: -0.015em; }
   .admin-body { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
-  .admin-col { flex: 1; min-width: 320px; display: flex; flex-direction: column; gap: 16px; }
-  .admin-card { background: #fff; border: 1px solid #e7eaf0; border-radius: 14px; padding: 16px 18px; }
-  .admin-card h3 { font-size: 11.5px; font-weight: 700; margin-bottom: 12px; text-transform: uppercase; letter-spacing: .06em; color: #64748b; }
-  .adm-client { border: 1px solid #eef1f6; border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
-  .adm-client-name { font-weight: 700; font-size: 14px; margin-bottom: 8px; }
-  .adm-user { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #f5f6f9; font-size: 12.5px; flex-wrap: wrap; }
-  .adm-email { font-weight: 600; color: #334155; word-break: break-all; }
-  .adm-toggle { font-size: 11.5px; color: #64748b; display: flex; align-items: center; gap: 4px; cursor: pointer; }
-  .adm-x { border: 1px solid #fecaca; color: #b91c1c; background: #fff; border-radius: 7px; padding: 3px 9px; font-size: 11px; cursor: pointer; margin-left: auto; }
-  .adm-add { border: 0; background: #4f46e5; color: #fff; border-radius: 7px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .admin-col { flex: 1; min-width: 330px; display: flex; flex-direction: column; gap: 16px; }
+  .admin-card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; box-shadow: var(--shadow-sm); }
+  .admin-card h3 { font-size: 11px; font-weight: 700; margin-bottom: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-3); }
+  .adm-client { border: 1px solid var(--line-2); border-radius: 11px; padding: 13px 14px; margin-bottom: 12px; }
+  .adm-client-head { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
+  .adm-client-logo { width: 26px; height: 26px; border-radius: 7px; border: 1px solid var(--line); object-fit: contain; background: #fff; flex: none; }
+  .adm-client-name { font-weight: 700; font-size: 14px; }
+  .adm-user { display: flex; align-items: center; gap: 9px; padding: 6px 0; border-bottom: 1px solid #f5f6f9; font-size: 12.5px; flex-wrap: wrap; }
+  .adm-email { font-weight: 600; color: var(--ink-2); word-break: break-all; }
+  .adm-toggle { font-size: 11.5px; color: var(--ink-3); display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .adm-x { border: 1px solid #fecaca; color: #b91c1c; background: var(--surface); border-radius: 7px; padding: 3px 9px; font-size: 11px; margin-left: auto; }
+  .adm-x:hover { background: #fef2f2; }
+  .adm-add { border: 0; background: var(--brand); color: #fff; border-radius: 7px; padding: 6px 12px; font-size: 12px; font-weight: 600; }
+  .adm-add:hover { background: var(--brand-2); }
   .adm-add:disabled { opacity: .5; }
-  .adm-adduser { display: flex; gap: 8px; margin-top: 9px; align-items: center; flex-wrap: wrap; }
-  .adm-campwrap { margin-top: 8px; }
-  .adm-camplist { border: 1px solid #d8dee8; border-radius: 8px; padding: 6px 10px; max-height: 132px; overflow-y: auto; background: #fafbfd; }
-  .adm-campitem { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #334155; padding: 3.5px 0; cursor: pointer; }
+  .adm-row { display: flex; gap: 8px; margin-top: 9px; align-items: center; flex-wrap: wrap; }
+  .adm-row input { flex: 1; min-width: 170px; border: 1px solid #d8dee8; border-radius: 8px; padding: 8px 10px; font-size: 12.5px; }
+  .adm-row input:focus { outline: none; border-color: #a5b4fc; }
+  .adm-camplist { border: 1px solid #d8dee8; border-radius: 8px; padding: 6px 10px; max-height: 132px; overflow-y: auto; background: #fafbfd; margin-top: 8px; }
+  .adm-campitem { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2); padding: 3.5px 0; cursor: pointer; }
   .adm-campitem input { flex: none; cursor: pointer; }
   .adm-campitem span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .adm-hint { font-size: 10.5px; color: #94a3b8; margin-top: 4px; line-height: 1.4; }
-  .adm-adduser input:not([type=checkbox]) { flex: 1; min-width: 170px; border: 1px solid #d8dee8; border-radius: 8px; padding: 7px 10px; font-size: 12.5px; }
-  .admin-row { display: flex; gap: 8px; margin-top: 6px; }
-  .admin-row input { flex: 1; border: 1px solid #d8dee8; border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  .adm-hint { font-size: 10.5px; color: var(--ink-4); margin-top: 5px; line-height: 1.45; }
   .adm-camp { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid #f5f6f9; flex-wrap: wrap; }
-  .adm-camp-info { flex: 1; min-width: 200px; }
+  .adm-camp-info { flex: 1; min-width: 190px; }
   .adm-camp-name { font-size: 13px; font-weight: 600; }
   .adm-camp-sub { font-size: 11.5px; color: #7c8698; margin-top: 2px; }
   .adm-camp select { border: 1px solid #d8dee8; border-radius: 8px; padding: 6px 8px; font-size: 12px; max-width: 170px; }
-  #admStatus { margin-top: 12px; font-size: 12.5px; color: #16a34a; }
+  #admStatus { margin-top: 13px; font-size: 12.5px; color: #16a34a; }
   #admStatus.err { color: #dc2626; }
+
+  /* ---------- login ---------- */
+  #gate {
+    min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 24px;
+    background:
+      radial-gradient(700px 340px at 15% 0%, rgba(99,102,241,.10), transparent 65%),
+      radial-gradient(700px 340px at 85% 100%, rgba(79,70,229,.08), transparent 65%),
+      var(--bg);
+  }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 36px 32px; width: 100%; max-width: 404px; box-shadow: 0 12px 40px rgba(15,23,42,.08); }
+  .card .logo { margin: 0 auto 16px; width: 52px; height: 52px; font-size: 22px; border-radius: 15px; }
+  .card h1 { font-size: 19px; font-weight: 800; text-align: center; letter-spacing: -0.02em; }
+  .card .sub2 { font-size: 13px; color: var(--ink-3); text-align: center; margin-top: 5px; margin-bottom: 20px; line-height: 1.5; }
+  .card label { display: block; font-size: 11.5px; font-weight: 600; color: var(--ink-2); margin-bottom: 6px; }
+  .card input { width: 100%; border: 1px solid #d8dee8; border-radius: 11px; padding: 11px 13px; font-size: 14px; color: var(--ink); }
+  .card input:focus { outline: none; border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(99,102,241,.15); }
+  .card .primary { width: 100%; margin-top: 13px; background: var(--brand); border: 0; color: #fff; border-radius: 11px; padding: 12px; font-size: 14px; font-weight: 600; box-shadow: 0 2px 8px rgba(79,70,229,.3); }
+  .card .primary:hover { background: var(--brand-2); }
+  .card .primary:disabled { opacity: .5; cursor: default; }
+  .card .msg { font-size: 12.5px; margin-top: 13px; text-align: center; line-height: 1.55; }
+  .card .msg.info { color: var(--brand-2); }
+  .card .msg.err { color: #dc2626; }
+  .card .alt { margin-top: 16px; font-size: 12px; color: var(--ink-4); text-align: center; }
+  .card .alt a { color: var(--brand); cursor: pointer; text-decoration: none; font-weight: 600; }
+  .card .foot { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line-2); font-size: 11px; color: var(--ink-4); text-align: center; line-height: 1.5; }
+  #codeRow { display: none; margin-top: 14px; }
+
+  @media (max-width: 860px) {
+    #search { width: 150px; }
+    .whoami { display: none; }
+  }
   @media (max-width: 760px) {
     aside { width: 100%; }
     main.show-thread aside { display: none; }
     main:not(.show-thread) section { display: none; }
     .back { display: inline-block; }
-    .controls input { width: 130px; }
-    .stat { min-width: 110px; padding: 9px 12px; }
-    .msgs { padding: 14px 12px; }
+    .stat { min-width: 116px; padding: 9px 12px; }
+    .msgs { padding: 14px 12px 18px; }
     .thread-head { padding: 13px 14px; }
-    .composer { padding: 12px 14px; }
+    .composer { padding: 11px 13px 13px; }
+    .editor { min-height: 150px; }
+    header { padding: 10px 13px; }
+    #statsBar { padding: 11px 13px 13px; }
+    #drill td, #drill th { padding-left: 13px; padding-right: 13px; }
   }
 </style>
 </head>
 <body>
 <div id="gate">
   <div class="card" id="loginCard">
-    <div class="logo">✉</div>
+    <div class="logo">&#9993;</div>
     <h1>Campaign Reply Inbox</h1>
     <div class="sub2">See every reply to your outreach campaigns,<br>updated in real time.</div>
     <div id="bootMsg" class="msg info" style="padding:10px 0 4px">Checking your session&hellip;</div>
@@ -346,33 +407,48 @@
     <div class="foot">Access is by invitation only.<br>No password needed — the login link is your key.</div>
   </div>
 </div>
+
 <div id="app">
   <header>
     <div class="brand">
       <div class="logo" id="logo">&ndash;</div>
-      <div><h1 id="clientName">Loading&hellip;</h1><div class="sub">Campaign Reply Inbox</div></div>
+      <div style="min-width:0">
+        <h1 id="clientName">Loading&hellip;</h1>
+        <div class="sub">Campaign Reply Inbox</div>
+      </div>
     </div>
     <div class="controls">
-      <select id="campaignFilter" style="display:none" aria-label="Filter by campaign"></select>
-      <input id="search" placeholder="Search name, email, subject&hellip;" aria-label="Search conversations">
-      <button id="refresh">Refresh</button>
-      <select id="adminClient" style="display:none" aria-label="Admin: switch client view"></select>
-      <button id="adminBtn" style="display:none">Admin</button>
+      <select id="campaignFilter" class="ctl" style="display:none" aria-label="Filter by campaign"></select>
+      <input id="search" class="ctl" placeholder="Search name, email, subject&hellip;" aria-label="Search conversations">
+      <button class="btn" id="refresh">Refresh</button>
+      <select id="adminClient" class="ctl" style="display:none" aria-label="Admin: switch client view"></select>
+      <button class="btn" id="adminBtn" style="display:none">Admin</button>
       <span class="whoami" id="whoami"></span>
-      <button id="logout">Log out</button>
+      <button class="btn" id="logout">Log out</button>
     </div>
   </header>
+
   <div id="statsBar" role="region" aria-label="Campaign statistics">
     <div id="campaignContext"></div>
     <div id="stats"></div>
   </div>
+
   <main id="main">
-    <aside id="listWrap"><div class="listhead"><div class="count" id="count">Loading</div><div class="filters" id="filters" role="tablist" aria-label="Filter conversations"></div></div><div id="list" role="list" aria-label="Conversations with replies"></div></aside>
-    <section id="threadWrap"><div class="empty" id="threadEmpty"><div class="big">&#128236;</div><div>Select a conversation to read the thread</div></div></section>
+    <aside id="listWrap">
+      <div class="listhead">
+        <div class="count" id="count">Loading</div>
+        <div class="filters" id="filters" role="tablist" aria-label="Filter conversations"></div>
+      </div>
+      <div id="list" role="list" aria-label="Conversations with replies"></div>
+    </aside>
+    <section id="threadWrap" aria-label="Conversation thread">
+      <div class="empty"><div class="big">&#128236;</div><div>Select a conversation to read the thread</div></div>
+    </section>
   </main>
+
   <div id="adminWrap">
     <div class="admin-head">
-      <button id="adminBack">&larr; Back to inbox</button>
+      <button class="btn" id="adminBack">&larr; Back to inbox</button>
       <h2>Admin — clients, campaigns &amp; access</h2>
     </div>
     <div class="admin-body">
@@ -380,7 +456,7 @@
         <div class="admin-card">
           <h3>Clients &amp; who can log in</h3>
           <div id="admClients"><div class="spinner">Loading&hellip;</div></div>
-          <div class="admin-row">
+          <div class="adm-row">
             <input id="admNewClient" placeholder="New client name (e.g. LookAcross)">
             <button id="admAddClient" class="adm-add">Add client</button>
           </div>
@@ -400,6 +476,19 @@
     <div id="admStatus"></div>
   </div>
 </div>
+
+<div id="drill" role="dialog" aria-modal="true" aria-label="Stat details">
+  <div class="backdrop" id="drillBackdrop"></div>
+  <div class="sheet">
+    <div class="dhead">
+      <h3 id="drillTitle">Details</h3>
+      <span class="dsub" id="drillSub"></span>
+      <button class="dclose" id="drillClose" aria-label="Close">&times;</button>
+    </div>
+    <div class="dbody" id="drillBody"></div>
+  </div>
+</div>
+
 <script type="application/json" id="inbox-data">{}</script>
 <script type="module">
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -418,6 +507,7 @@ var sb = createClient(SUPABASE_URL, ANON_KEY, {
 var POSITIVE = ['interested', 'meeting request', 'information request'];
 var state = { data: null, selected: null, campaign: 'all', q: '', filter: 'all', adminClientId: null };
 var appStarted = false;
+var refreshTimer = null;
 
 async function api(path, opts) {
   if (state.adminClientId && path.indexOf('/api/admin/') !== 0) {
@@ -466,19 +556,19 @@ function hueOf(s) {
   return h % 360;
 }
 
+function initials(name, email) {
+  var s = (name || email || '?').trim();
+  var parts = s.split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return s.slice(0, 2).toUpperCase();
+}
+
 function avatarFor(name, email) {
   var a = el('div', 'avatar', initials(name, email));
   var h = hueOf((email || name || '?').toLowerCase());
   a.style.background = 'hsl(' + h + ', 65%, 91%)';
   a.style.color = 'hsl(' + h + ', 45%, 32%)';
   return a;
-}
-
-function initials(name, email) {
-  var s = (name || email || '?').trim();
-  var parts = s.split(/\s+/);
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-  return s.slice(0, 2).toUpperCase();
 }
 
 function catCls(c) {
@@ -500,15 +590,20 @@ function isPositive(c) {
   return false;
 }
 
+function isUntagged(c) {
+  var s = (c.lead_category || '').toLowerCase();
+  return !s || s.indexOf('uncategoriz') >= 0;
+}
+
+function needsReply(c) {
+  return c.last_direction === 'REPLY' && isPositive(c.lead_category);
+}
+
 function fmtShort(t) {
   if (!t) return '';
   var d = new Date(t), now = new Date();
-  if (d.toDateString() === now.toDateString()) {
-    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  }
-  if (d.getFullYear() === now.getFullYear()) {
-    return d.toLocaleDateString([], { day: 'numeric', month: 'short' });
-  }
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (d.getFullYear() === now.getFullYear()) return d.toLocaleDateString([], { day: 'numeric', month: 'short' });
   return d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
@@ -539,13 +634,22 @@ function selectedCampaigns() {
   return c ? [c] : [];
 }
 
-function statTile(key, value, label, sub, cls) {
-  var t = el('div', 'stat' + (cls ? ' ' + cls : ''));
+/* ---------- stats + drill-down ---------- */
+
+function statTile(key, value, label, sub, cls, drill) {
+  var t = el('button', 'stat' + (cls ? ' ' + cls : '') + (drill ? ' tap' : ''));
+  t.type = 'button';
   t.setAttribute('data-stat', key);
   t.setAttribute('data-value', String(value));
   t.appendChild(el('div', 'v', typeof value === 'number' ? fmtCompact(value) : String(value)));
   t.appendChild(el('div', 'l', label));
   if (sub) t.appendChild(el('div', 's', sub));
+  if (drill) {
+    t.title = 'Click to see the leads behind this number';
+    t.onclick = drill;
+  } else {
+    t.style.cursor = 'default';
+  }
   return t;
 }
 
@@ -576,7 +680,7 @@ function renderStats() {
     ctx.appendChild(el('span', 'cname', 'All campaigns (' + cs.length + ')'));
   }
 
-  var agg = { total_leads: 0, unique_sent_count: 0, sent_count: 0, reply_count: 0, open: 0, bounce_count: 0 };
+  var agg = { total_leads: 0, unique_sent_count: 0, sent_count: 0, reply_count: 0, open: 0, bounce_count: 0, unsub: 0 };
   cs.forEach(function (c) {
     var s = c.stats || {};
     agg.total_leads += num(s.total_leads);
@@ -585,33 +689,111 @@ function renderStats() {
     agg.reply_count += num(s.reply_count);
     agg.open += num(s.unique_open_count);
     agg.bounce_count += num(s.bounce_count);
+    agg.unsub += num(s.unsubscribed_count);
   });
 
   var ids = {};
   cs.forEach(function (c) { ids[String(c.id)] = true; });
   var convs = (state.data ? state.data.conversations : []).filter(function (c) { return ids[String(c.campaign_id)]; });
   var positive = convs.filter(function (c) { return isPositive(c.lead_category); }).length;
-
   var replyRate = agg.unique_sent_count ? (agg.reply_count / agg.unique_sent_count * 100) : 0;
   var positiveRate = agg.reply_count ? (positive / agg.reply_count * 100) : 0;
 
-  wrap.appendChild(statTile('total_leads', agg.total_leads, 'Leads in campaign'));
-  wrap.appendChild(statTile('emails_sent', agg.sent_count, 'Emails sent', fmtNum(agg.unique_sent_count) + ' people contacted'));
-  if (agg.open > 0) wrap.appendChild(statTile('unique_opens', agg.open, 'People opened'));
-  wrap.appendChild(statTile('replies', agg.reply_count, 'Replies', replyRate.toFixed(1) + '% of people contacted', 'hl'));
-  wrap.appendChild(statTile('positive_replies', positive, 'Positive replies', positiveRate.toFixed(0) + '% of replies · Interested / Meeting / Info', 'good'));
-  if (agg.bounce_count > 0) wrap.appendChild(statTile('bounces', agg.bounce_count, 'Bounced'));
+  wrap.appendChild(statTile('total_leads', agg.total_leads, 'Leads in campaign',
+    'Total uploaded'));
+  wrap.appendChild(statTile('emails_sent', agg.sent_count, 'Emails sent',
+    fmtNum(agg.unique_sent_count) + ' people contacted', null,
+    function () { openDrill('all', 'People contacted'); }));
+  if (agg.open > 0) {
+    wrap.appendChild(statTile('unique_opens', agg.open, 'People opened', 'Open tracking on', null,
+      function () { openDrill('opened', 'People who opened'); }));
+  }
+  wrap.appendChild(statTile('replies', agg.reply_count, 'Replies',
+    replyRate.toFixed(1) + '% of people contacted', 'hl',
+    function () { openDrill('replied', 'People who replied'); }));
+  wrap.appendChild(statTile('positive_replies', positive, 'Positive replies',
+    positiveRate.toFixed(0) + '% of replies · Interested / Meeting / Info', 'good',
+    function () { setFilter('positive'); }));
+  if (agg.bounce_count > 0) {
+    wrap.appendChild(statTile('bounces', agg.bounce_count, 'Bounced', 'Undeliverable', 'warn',
+      function () { openDrill('bounced', 'Bounced emails'); }));
+  }
+  if (agg.unsub > 0) {
+    wrap.appendChild(statTile('unsubscribed', agg.unsub, 'Unsubscribed', null, 'warn',
+      function () { openDrill('unsubscribed', 'Unsubscribed leads'); }));
+  }
 }
 
-// Untagged (or AI-uncategorised) conversations a human still has to triage.
-function isUntagged(c) {
-  var s = (c.lead_category || '').toLowerCase();
-  return !s || s.indexOf('uncategoriz') >= 0;
+function closeDrill() {
+  document.getElementById('drill').style.display = 'none';
+  document.getElementById('drillBody').innerHTML = '';
 }
 
-// Waiting on us: a positive lead whose last message is theirs.
-function needsReply(c) {
-  return c.last_direction === 'REPLY' && isPositive(c.lead_category);
+function openDrill(status, title) {
+  var box = document.getElementById('drill');
+  var body = document.getElementById('drillBody');
+  var camp = state.campaign === 'all' ? null : campaignById(state.campaign);
+  document.getElementById('drillTitle').textContent = title;
+  document.getElementById('drillSub').textContent = camp ? camp.name : 'All campaigns';
+  body.innerHTML = '';
+  body.appendChild(el('div', 'spinner', 'Loading from SmartLead…'));
+  box.style.display = 'block';
+  var path = '/api/drill?status=' + encodeURIComponent(status) +
+    (camp ? '&campaign_id=' + encodeURIComponent(camp.id) : '');
+  api(path).then(function (d) {
+    body.innerHTML = '';
+    if (!d.items.length) {
+      body.appendChild(el('div', 'spinner', 'Nothing to show here yet.'));
+      return;
+    }
+    var showOpens = status === 'opened';
+    var table = document.createElement('table');
+    var thead = document.createElement('thead');
+    var hr = document.createElement('tr');
+    ['Lead', 'Campaign', 'Subject', showOpens ? 'Opened' : (status === 'replied' ? 'Replied' : 'Sent')]
+      .forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    thead.appendChild(hr);
+    table.appendChild(thead);
+    var tbody = document.createElement('tbody');
+    var locals = (state.data && state.data.conversations) || [];
+    d.items.forEach(function (it) {
+      var tr = document.createElement('tr');
+      var tdLead = document.createElement('td');
+      tdLead.appendChild(el('div', null, it.lead_name || it.lead_email));
+      if (it.lead_name) tdLead.appendChild(el('div', 'em', it.lead_email));
+      tr.appendChild(tdLead);
+      tr.appendChild(el('td', null, it.campaign_name || String(it.campaign_id)));
+      tr.appendChild(el('td', null, it.subject || '—'));
+      var when = showOpens ? it.open_time : (status === 'replied' ? it.reply_time : it.sent_time);
+      tr.appendChild(el('td', null, when ? fmtLong(when) : '—'));
+      var match = locals.filter(function (cv) {
+        return String(cv.campaign_id) === String(it.campaign_id) &&
+          (cv.lead_email || '').toLowerCase() === (it.lead_email || '').toLowerCase();
+      })[0];
+      if (match) {
+        tr.className = 'linked';
+        tr.title = 'Open this conversation';
+        tr.onclick = function () { closeDrill(); openThread(match.id); };
+      }
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    body.appendChild(table);
+    var note = 'Live from SmartLead · ' + d.items.length + ' shown';
+    if (d.truncated) note += ' (first 100 per campaign — open the campaign in SmartLead for the full list)';
+    body.appendChild(el('div', 'dnote', note));
+  }).catch(function (e) {
+    body.innerHTML = '';
+    body.appendChild(el('div', 'spinner', 'Could not load: ' + ((e.body && e.body.error) || e.message)));
+  });
+}
+
+/* ---------- conversation list ---------- */
+
+function setFilter(f) {
+  state.filter = f;
+  renderList();
+  document.getElementById('listWrap').scrollTop = 0;
 }
 
 function matchesFilter(c) {
@@ -627,24 +809,21 @@ function matchesFilter(c) {
 function renderFilters(base) {
   var wrap = document.getElementById('filters');
   wrap.innerHTML = '';
-  var toProcess = base.filter(isUntagged).length;
-  var needs = base.filter(needsReply).length;
-  var pos = base.filter(function (c) { return isPositive(c.lead_category); }).length;
-  var cats = {};
-  base.forEach(function (c) { if (c.lead_category) cats[c.lead_category] = (cats[c.lead_category] || 0) + 1; });
   var defs = [
     ['all', 'All', base.length],
-    ['to_process', 'To process', toProcess],
-    ['needs_reply', 'Needs reply', needs],
-    ['positive', 'Positive', pos]
+    ['to_process', 'To process', base.filter(isUntagged).length],
+    ['needs_reply', 'Needs reply', base.filter(needsReply).length],
+    ['positive', 'Positive', base.filter(function (c) { return isPositive(c.lead_category); }).length]
   ];
+  var cats = {};
+  base.forEach(function (c) { if (c.lead_category) cats[c.lead_category] = (cats[c.lead_category] || 0) + 1; });
   Object.keys(cats).sort().forEach(function (k) { defs.push(['cat:' + k, k, cats[k]]); });
   defs.forEach(function (d) {
     if (d[0] !== 'all' && !d[2] && state.filter !== d[0]) return;
     var b = el('button', 'fchip' + (state.filter === d[0] ? ' on' : ''), d[1] + ' · ' + d[2]);
     b.type = 'button';
     b.setAttribute('data-filter', d[0]);
-    b.onclick = function () { state.filter = d[0]; renderList(); };
+    b.onclick = function () { setFilter(d[0]); };
     wrap.appendChild(b);
   });
 }
@@ -660,15 +839,17 @@ function renderList() {
     if (!matchesFilter(c)) return false;
     if (state.q) {
       var camp = campaignById(c.campaign_id);
-      var hay = ((c.lead_name || '') + ' ' + c.lead_email + ' ' + (c.subject || '') + ' ' + (c.last_message_preview || '') + ' ' + (camp ? camp.name : '')).toLowerCase();
+      var hay = ((c.lead_name || '') + ' ' + c.lead_email + ' ' + (c.subject || '') + ' ' +
+        (c.last_message_preview || '') + ' ' + (camp ? camp.name : '')).toLowerCase();
       if (hay.indexOf(state.q) < 0) return false;
     }
     return true;
   });
-  document.getElementById('count').textContent = convs.length + ' conversation' + (convs.length === 1 ? '' : 's') + ' with replies';
+  document.getElementById('count').textContent =
+    convs.length + ' conversation' + (convs.length === 1 ? '' : 's') + ' with replies';
   if (!convs.length) {
     list.appendChild(el('div', 'spinner',
-      state.filter !== 'all' || state.q
+      (state.filter !== 'all' || state.q)
         ? 'Nothing matches this filter — try another chip or clear the search.'
         : 'No replies yet.'));
     return;
@@ -684,6 +865,7 @@ function renderList() {
     item.setAttribute('data-campaign-id', String(c.campaign_id));
     item.setAttribute('data-campaign-name', camp ? (camp.name || '') : '');
     item.setAttribute('data-last-message-at', c.last_message_at || '');
+    item.setAttribute('data-last-direction', c.last_direction || '');
     item.setAttribute('data-reply-count', String(c.reply_count));
     item.appendChild(avatarFor(c.lead_name, c.lead_email));
     var meta = el('div', 'meta');
@@ -694,7 +876,12 @@ function renderList() {
     if (c.subject) meta.appendChild(el('div', 'subj', c.subject));
     if (c.last_message_preview) meta.appendChild(el('div', 'prev', c.last_message_preview));
     var badges = el('div', 'badges');
-    if (c.lead_category) badges.appendChild(el('span', 'badge ' + (catCls(c.lead_category) || ''), c.lead_category));
+    if (c.lead_category) {
+      badges.appendChild(el('span', 'badge ' + (catCls(c.lead_category) || ''), c.lead_category));
+    } else {
+      badges.appendChild(el('span', 'badge amber', 'Not tagged'));
+    }
+    if (needsReply(c)) badges.appendChild(el('span', 'badge wait', 'Awaiting your reply'));
     badges.appendChild(el('span', 'badge', c.reply_count + (c.reply_count === 1 ? ' reply' : ' replies')));
     if (camp && camp.name) {
       var cb = el('span', 'badge campaign', camp.name);
@@ -708,15 +895,224 @@ function renderList() {
   });
 }
 
+/* ---------- thread ---------- */
+
 function bodyFrame(html) {
   var f = document.createElement('iframe');
   f.setAttribute('sandbox', 'allow-same-origin allow-popups');
-  f.srcdoc = '<html><head><base target="_blank"><style>body{margin:14px 16px;font:13.5px/1.55 Inter,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1f2937;word-break:break-word}img{max-width:100%;height:auto}a{color:#4f46e5}blockquote{border-left:3px solid #e5e7eb;margin:8px 0;padding-left:12px;color:#6b7280}</style></head><body>' + (html || '') + '</body></html>';
+  f.srcdoc = '<html><head><base target="_blank"><style>body{margin:14px 16px;font:13.5px/1.6 Inter,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1f2937;word-break:break-word}img{max-width:100%;height:auto}a{color:#4f46e5}blockquote{border-left:3px solid #e5e7eb;margin:8px 0;padding-left:12px;color:#6b7280}</style></head><body>' + (html || '') + '</body></html>';
   f.style.height = '80px';
   f.onload = function () {
-    try { f.style.height = Math.min(1400, f.contentDocument.body.scrollHeight + 34) + 'px'; } catch (e) { f.style.height = '400px'; }
+    try { f.style.height = Math.min(1400, f.contentDocument.body.scrollHeight + 34) + 'px'; }
+    catch (e) { f.style.height = '400px'; }
   };
   return f;
+}
+
+function buildComposer(conv) {
+  var comp = el('div', 'composer');
+  var ed = el('div', 'editor');
+  ed.contentEditable = 'true';
+  ed.setAttribute('data-placeholder', 'Write a reply to ' + (conv.lead_name || conv.lead_email) + '…');
+  ed.setAttribute('aria-label', 'Reply message');
+
+  var savedRange = null;
+  function saveSel() {
+    var s = window.getSelection();
+    if (s && s.rangeCount && ed.contains(s.anchorNode)) savedRange = s.getRangeAt(0).cloneRange();
+  }
+  function restoreSel() {
+    if (!savedRange) { ed.focus(); return; }
+    var s = window.getSelection();
+    s.removeAllRanges();
+    s.addRange(savedRange);
+  }
+  ed.addEventListener('keyup', saveSel);
+  ed.addEventListener('mouseup', saveSel);
+  ed.addEventListener('blur', saveSel);
+
+  function cmd(name, value) {
+    ed.focus();
+    restoreSel();
+    try { document.execCommand('styleWithCSS', false, true); } catch (e) {}
+    document.execCommand(name, false, value || null);
+    saveSel();
+  }
+  function tbtn(html, title, fn) {
+    var b = el('button', 'tbtn');
+    b.type = 'button';
+    b.innerHTML = html;
+    b.title = title;
+    b.addEventListener('mousedown', function (ev) { ev.preventDefault(); });
+    b.addEventListener('click', function (ev) { ev.preventDefault(); fn(); });
+    return b;
+  }
+
+  var tb = el('div', 'toolbar');
+  tb.appendChild(tbtn('<b>B</b>', 'Bold (Ctrl/Cmd+B)', function () { cmd('bold'); }));
+  tb.appendChild(tbtn('<i>I</i>', 'Italic (Ctrl/Cmd+I)', function () { cmd('italic'); }));
+  tb.appendChild(tbtn('<u>U</u>', 'Underline (Ctrl/Cmd+U)', function () { cmd('underline'); }));
+  tb.appendChild(el('span', 'tsep'));
+  [['#111827', 'Default text'], ['#dc2626', 'Red text'], ['#2563eb', 'Blue text'], ['#16a34a', 'Green text'], ['#b45309', 'Amber text']]
+    .forEach(function (c) {
+      var s = el('button', 'swatch');
+      s.type = 'button';
+      s.title = c[1];
+      s.style.background = c[0];
+      s.addEventListener('mousedown', function (ev) { ev.preventDefault(); });
+      s.addEventListener('click', function (ev) { ev.preventDefault(); cmd('foreColor', c[0]); });
+      tb.appendChild(s);
+    });
+  tb.appendChild(el('span', 'tsep'));
+  [['#fef08a', 'Highlight yellow'], ['#bbf7d0', 'Highlight green'], ['#bfdbfe', 'Highlight blue'], ['transparent', 'Remove highlight']]
+    .forEach(function (c) {
+      var s = el('button', 'swatch hi');
+      s.type = 'button';
+      s.title = c[1];
+      s.style.background = c[0] === 'transparent' ? '#fff' : c[0];
+      if (c[0] === 'transparent') s.textContent = '×';
+      s.style.fontSize = '10px';
+      s.style.color = '#94a3b8';
+      s.addEventListener('mousedown', function (ev) { ev.preventDefault(); });
+      s.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ed.focus();
+        restoreSel();
+        try { document.execCommand('styleWithCSS', false, true); } catch (e) {}
+        if (!document.execCommand('hiliteColor', false, c[0])) {
+          document.execCommand('backColor', false, c[0]);
+        }
+        saveSel();
+      });
+      tb.appendChild(s);
+    });
+  tb.appendChild(el('span', 'tsep'));
+  tb.appendChild(tbtn('&#8226;&nbsp;List', 'Bulleted list', function () { cmd('insertUnorderedList'); }));
+
+  var linkRow = el('div', 'link-row');
+  var linkBtn = tbtn('&#128279; Link', 'Insert link', function () {
+    saveSel();
+    var open = linkRow.style.display === 'flex';
+    linkRow.style.display = open ? 'none' : 'flex';
+    if (!open) linkInput.focus();
+  });
+  tb.appendChild(linkBtn);
+  tb.appendChild(tbtn('&#10005; Clear', 'Remove formatting', function () { cmd('removeFormat'); }));
+
+  var right = el('div', 'right');
+  var ccBtn = el('button', 'cclink', 'Cc / Bcc');
+  ccBtn.type = 'button';
+  var expandBtn = el('button', 'tbtn', '⤢');
+  expandBtn.type = 'button';
+  expandBtn.title = 'Expand the writing area';
+  right.appendChild(ccBtn);
+  right.appendChild(expandBtn);
+  tb.appendChild(right);
+
+  var linkInput = document.createElement('input');
+  linkInput.placeholder = 'https://example.com/page';
+  linkInput.setAttribute('autocomplete', 'off');
+  var linkGo = el('button', 'adm-add', 'Insert link');
+  linkGo.type = 'button';
+  var linkCancel = el('button', 'tbtn', 'Cancel');
+  linkCancel.type = 'button';
+  linkGo.onclick = function () {
+    var url = linkInput.value.trim();
+    if (!url) return;
+    if (!/^https?:\/\//i.test(url) && !/^mailto:/i.test(url)) url = 'https://' + url;
+    ed.focus();
+    restoreSel();
+    var sel = window.getSelection();
+    if (sel && sel.isCollapsed) {
+      document.execCommand('insertHTML', false,
+        '<a href="' + url.replace(/"/g, '&quot;') + '">' + url.replace(/</g, '&lt;') + '</a>&nbsp;');
+    } else {
+      document.execCommand('createLink', false, url);
+    }
+    linkInput.value = '';
+    linkRow.style.display = 'none';
+    saveSel();
+  };
+  linkCancel.onclick = function () { linkRow.style.display = 'none'; linkInput.value = ''; };
+  linkRow.appendChild(linkInput);
+  linkRow.appendChild(linkGo);
+  linkRow.appendChild(linkCancel);
+
+  var ccRow = el('div', 'cc-row');
+  var ccIn = document.createElement('input');
+  ccIn.placeholder = 'Cc — type or paste addresses, comma separated';
+  var bccIn = document.createElement('input');
+  bccIn.placeholder = 'Bcc — type or paste addresses, comma separated';
+  [ccIn, bccIn].forEach(function (inp) {
+    inp.type = 'text';
+    inp.name = 'nofill-' + Math.random().toString(36).slice(2);
+    inp.setAttribute('autocomplete', 'off');
+    inp.setAttribute('autocorrect', 'off');
+    inp.setAttribute('autocapitalize', 'off');
+    inp.spellcheck = false;
+    inp.setAttribute('readonly', 'readonly');
+    inp.addEventListener('focus', function () { inp.removeAttribute('readonly'); });
+    inp.addEventListener('blur', function () { inp.setAttribute('readonly', 'readonly'); });
+  });
+  ccRow.appendChild(ccIn);
+  ccRow.appendChild(bccIn);
+  ccBtn.onclick = function () {
+    var open = ccRow.style.display === 'flex';
+    ccRow.style.display = open ? 'none' : 'flex';
+    if (!open) ccIn.focus();
+  };
+  expandBtn.onclick = function () {
+    comp.classList.toggle('expanded');
+    expandBtn.textContent = comp.classList.contains('expanded') ? '⤡' : '⤢';
+    expandBtn.title = comp.classList.contains('expanded') ? 'Shrink the writing area' : 'Expand the writing area';
+    ed.focus();
+  };
+
+  var sendRow = el('div', 'send-row');
+  var btn = el('button', 'send', 'Send reply');
+  btn.type = 'button';
+  var status = el('span', 'sendstate', '');
+  sendRow.appendChild(btn);
+  sendRow.appendChild(el('span', 'hint', 'Sends from the same mailbox that emailed this lead, in the same thread.'));
+  sendRow.appendChild(status);
+
+  btn.onclick = function () {
+    var plain = ed.innerText.replace(/ /g, ' ').trim();
+    if (!plain) { status.className = 'sendstate err'; status.textContent = 'Write a message first.'; return; }
+    btn.disabled = true;
+    ed.contentEditable = 'false';
+    status.className = 'sendstate';
+    status.textContent = 'Sending…';
+    api('/api/reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversation_id: conv.id,
+        body: plain,
+        body_html: ed.innerHTML,
+        cc: ccIn.value.trim(),
+        bcc: bccIn.value.trim()
+      })
+    }).then(function (j) {
+      if (!j || !j.ok) throw new Error('unexpected');
+      status.className = 'sendstate ok';
+      status.textContent = 'Sent ✓';
+      load(true);
+      setTimeout(function () { openThread(conv.id); }, 1200);
+    }).catch(function (e) {
+      btn.disabled = false;
+      ed.contentEditable = 'true';
+      status.className = 'sendstate err';
+      status.textContent = 'Failed: ' + ((e.body && e.body.error) || e.message || 'unknown error');
+    });
+  };
+
+  comp.appendChild(tb);
+  comp.appendChild(ed);
+  comp.appendChild(linkRow);
+  comp.appendChild(ccRow);
+  comp.appendChild(sendRow);
+  return comp;
 }
 
 function renderThread(d) {
@@ -727,6 +1123,7 @@ function renderThread(d) {
   head.setAttribute('data-lead-email', d.conversation.lead_email);
   head.setAttribute('data-campaign-id', String(d.conversation.campaign_id));
   head.setAttribute('data-campaign-name', d.conversation.campaign_name || '');
+
   var top = el('div', 'top');
   var back = el('button', 'back');
   back.innerHTML = '&larr; Inbox';
@@ -734,12 +1131,13 @@ function renderThread(d) {
   top.appendChild(back);
   top.appendChild(el('h2', null, d.conversation.lead_name || d.conversation.lead_email));
   top.appendChild(el('span', 'email', d.conversation.lead_email));
+
   var cats = (state.data && state.data.categories) || [];
-  var canTag = state.data && state.data.client && state.data.client.can_reply && cats.length;
-  if (canTag) {
+  var canWrite = state.data && state.data.client && state.data.client.can_reply;
+  if (canWrite && cats.length) {
     var tagBox = el('div', 'tagbox');
     var tagSel = document.createElement('select');
-    tagSel.title = 'Tag this conversation (updates SmartLead too)';
+    tagSel.title = 'Tag this conversation — also updates SmartLead';
     var blank = document.createElement('option');
     blank.value = '';
     blank.textContent = 'Not tagged yet — set a tag';
@@ -768,14 +1166,14 @@ function renderThread(d) {
         tagSel.disabled = false;
         tagSel.className = '';
         tagState.className = 'tagstate ok';
-        tagState.textContent = 'Tagged ✓';
+        tagState.textContent = 'Tagged ✓ (SmartLead updated)';
         d.conversation.lead_category = j.category;
-        // Reflect it in the list + filter counts without a full reload.
         (state.data.conversations || []).forEach(function (cv) {
           if (cv.id === d.conversation.id) cv.lead_category = j.category;
         });
         renderList();
-        setTimeout(function () { tagState.textContent = ''; }, 2500);
+        renderStats();
+        setTimeout(function () { tagState.textContent = ''; }, 3000);
       }).catch(function (e) {
         tagSel.disabled = false;
         tagSel.value = current ? String(current.id) : '';
@@ -791,12 +1189,15 @@ function renderThread(d) {
     top.appendChild(el('span', 'badge ' + (catCls(d.conversation.lead_category) || ''), d.conversation.lead_category));
   }
   head.appendChild(top);
-  if (d.conversation.subject) head.appendChild(el('div', 'subject', 'Subject: ' + d.conversation.subject));
-  var cl = el('div', 'campaign-line');
-  cl.appendChild(document.createTextNode('Campaign: '));
-  cl.appendChild(el('b', null, d.conversation.campaign_name || ('#' + d.conversation.campaign_id)));
-  head.appendChild(cl);
+
+  var meta2 = el('div', 'meta2');
+  if (d.conversation.subject) meta2.appendChild(el('span', null, 'Subject: ' + d.conversation.subject));
+  if (d.conversation.subject) meta2.appendChild(el('span', 'dot', '·'));
+  meta2.appendChild(el('span', null, 'Campaign: '));
+  meta2.appendChild(el('b', null, d.conversation.campaign_name || ('#' + d.conversation.campaign_id)));
+  head.appendChild(meta2);
   wrap.appendChild(head);
+
   var msgs = el('div', 'msgs');
   d.messages.forEach(function (m) {
     var card = el('div', 'msg ' + (m.direction === 'REPLY' ? 'reply' : ''));
@@ -812,120 +1213,16 @@ function renderThread(d) {
     if (m.direction === 'REPLY') {
       card.appendChild(bodyFrame(m.body_html));
     } else {
-      var cb2 = el('div', 'collapsed-body');
-      cb2.appendChild(document.createTextNode((m.preview || '').slice(0, 140) + '… '));
-      cb2.appendChild(el('span', null, 'Show email'));
-      cb2.onclick = function () { card.replaceChild(bodyFrame(m.body_html), cb2); };
-      card.appendChild(cb2);
+      var cb = el('div', 'collapsed-body');
+      cb.appendChild(document.createTextNode((m.preview || '').slice(0, 140) + '… '));
+      cb.appendChild(el('span', null, 'Show email'));
+      cb.onclick = function () { card.replaceChild(bodyFrame(m.body_html), cb); };
+      card.appendChild(cb);
     }
     msgs.appendChild(card);
   });
   wrap.appendChild(msgs);
-  if (state.data && state.data.client && state.data.client.can_reply) {
-    var comp = el('div', 'composer');
-    var ed = el('div', 'editor');
-    var tb = el('div', 'toolbar');
-    function tbtn(html, cmd, val, title) {
-      var b = el('button', 'tbtn');
-      b.innerHTML = html;
-      b.type = 'button';
-      b.title = title;
-      b.addEventListener('mousedown', function (ev) { ev.preventDefault(); });
-      b.addEventListener('click', function (ev) {
-        ev.preventDefault();
-        ed.focus();
-        document.execCommand(cmd, false, val || null);
-      });
-      return b;
-    }
-    tb.appendChild(tbtn('<b>B</b>', 'bold', null, 'Bold'));
-    tb.appendChild(tbtn('<i>I</i>', 'italic', null, 'Italic'));
-    tb.appendChild(tbtn('<u>U</u>', 'underline', null, 'Underline'));
-    [['#111827', 'Default'], ['#dc2626', 'Red'], ['#2563eb', 'Blue'], ['#16a34a', 'Green']].forEach(function (c) {
-      var s = el('button', 'swatch');
-      s.type = 'button';
-      s.title = 'Text colour: ' + c[1];
-      s.style.background = c[0];
-      s.addEventListener('mousedown', function (ev) { ev.preventDefault(); });
-      s.addEventListener('click', function (ev) {
-        ev.preventDefault();
-        ed.focus();
-        document.execCommand('foreColor', false, c[0]);
-      });
-      tb.appendChild(s);
-    });
-    var ccLink = el('span', 'cclink', 'Cc / Bcc');
-    tb.appendChild(ccLink);
-    ed.contentEditable = 'true';
-    ed.setAttribute('data-placeholder', 'Write a reply to ' + (d.conversation.lead_name || d.conversation.lead_email) + '…');
-    ed.setAttribute('aria-label', 'Reply message');
-    var ccRow = el('div', 'cc-row');
-    var ccIn = document.createElement('input');
-    ccIn.placeholder = 'Cc — type or paste addresses, comma separated (optional)';
-    var bccIn = document.createElement('input');
-    bccIn.placeholder = 'Bcc — type or paste addresses, comma separated (optional)';
-    // No browser autofill/suggestions here: addresses must be typed or pasted.
-    [ccIn, bccIn].forEach(function (inp) {
-      inp.type = 'text';
-      inp.name = 'nofill-' + Math.random().toString(36).slice(2);
-      inp.setAttribute('autocomplete', 'off');
-      inp.setAttribute('autocorrect', 'off');
-      inp.setAttribute('autocapitalize', 'off');
-      inp.spellcheck = false;
-      inp.setAttribute('readonly', 'readonly');
-      inp.addEventListener('focus', function () { inp.removeAttribute('readonly'); });
-      inp.addEventListener('blur', function () { inp.setAttribute('readonly', 'readonly'); });
-    });
-    ccRow.appendChild(ccIn);
-    ccRow.appendChild(bccIn);
-    ccLink.onclick = function () {
-      var open = ccRow.style.display === 'flex';
-      ccRow.style.display = open ? 'none' : 'flex';
-      if (!open) ccIn.focus();
-    };
-    var row = el('div', 'row');
-    var btn = el('button', null, 'Send reply');
-    var hint = el('span', 'hint', 'Sends from the same mailbox that emailed this lead, in the same thread.');
-    var status = el('span', 'status', '');
-    row.appendChild(btn);
-    row.appendChild(hint);
-    row.appendChild(status);
-    comp.appendChild(tb);
-    comp.appendChild(ed);
-    comp.appendChild(ccRow);
-    comp.appendChild(row);
-    btn.onclick = function () {
-      var plain = ed.innerText.replace(/ /g, ' ').trim();
-      if (!plain) { status.className = 'status err'; status.textContent = 'Write a message first.'; return; }
-      btn.disabled = true; ed.contentEditable = 'false';
-      status.className = 'status'; status.textContent = 'Sending…';
-      api('/api/reply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          conversation_id: d.conversation.id,
-          body: plain,
-          body_html: ed.innerHTML,
-          cc: ccIn.value.trim(),
-          bcc: bccIn.value.trim()
-        })
-      }).then(function (j) {
-        if (j && j.ok) {
-          status.className = 'status ok';
-          status.textContent = 'Sent ✓';
-          load(true);
-          setTimeout(function () { openThread(d.conversation.id); }, 1200);
-        } else {
-          throw new Error('unexpected');
-        }
-      }).catch(function (e) {
-        btn.disabled = false; ed.contentEditable = 'true';
-        status.className = 'status err';
-        status.textContent = 'Failed: ' + ((e.body && e.body.error) || e.message || 'unknown error');
-      });
-    };
-    wrap.appendChild(comp);
-  }
+  if (canWrite) wrap.appendChild(buildComposer(d.conversation));
   msgs.scrollTop = msgs.scrollHeight;
 }
 
@@ -942,6 +1239,8 @@ function openThread(id) {
   });
 }
 
+/* ---------- gates ---------- */
+
 function showGate() {
   document.getElementById('app').style.display = 'none';
   document.getElementById('gate').style.display = 'flex';
@@ -955,8 +1254,7 @@ function showDenied(email) {
   document.getElementById('gate').style.display = 'flex';
   document.getElementById('bootMsg').style.display = 'none';
   document.getElementById('loginForm').style.display = 'none';
-  var box = document.getElementById('deniedBox');
-  box.style.display = 'block';
+  document.getElementById('deniedBox').style.display = 'block';
   document.getElementById('deniedMsg').textContent =
     (email || 'This account') + ' does not have access to any campaign inbox. Ask your agency to add your email, then sign in again.';
 }
@@ -964,6 +1262,28 @@ function showDenied(email) {
 function showApp() {
   document.getElementById('gate').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
+}
+
+function renderBrand(client) {
+  var logo = document.getElementById('logo');
+  logo.innerHTML = '';
+  if (client.logo_url) {
+    logo.className = 'logo has-img';
+    var img = document.createElement('img');
+    img.src = client.logo_url;
+    img.alt = client.name || 'Client logo';
+    img.onerror = function () {
+      logo.className = 'logo';
+      logo.textContent = (client.name || '?')[0].toUpperCase();
+    };
+    logo.appendChild(img);
+  } else {
+    logo.className = 'logo';
+    logo.textContent = (client.name || '?')[0].toUpperCase();
+  }
+  document.getElementById('clientName').textContent = client.name;
+  document.getElementById('whoami').textContent = client.user_email || '';
+  document.title = client.name + ' — Reply Inbox';
 }
 
 function load(silent) {
@@ -976,10 +1296,7 @@ function load(silent) {
     state.data = d;
     try { document.getElementById('inbox-data').textContent = JSON.stringify(d); } catch (e) {}
     document.body.setAttribute('data-client', d.client.name || '');
-    document.getElementById('clientName').textContent = d.client.name;
-    document.getElementById('logo').textContent = (d.client.name || '?')[0].toUpperCase();
-    document.getElementById('whoami').textContent = d.client.user_email || '';
-    document.title = d.client.name + ' — Reply Inbox';
+    renderBrand(d.client);
     var sel = document.getElementById('campaignFilter');
     if (d.campaigns.length > 1) {
       sel.style.display = '';
@@ -1001,9 +1318,9 @@ function load(silent) {
       state.campaign = 'all';
       if (d.campaigns.length > 1) sel.value = 'all';
     }
+    var asel = document.getElementById('adminClient');
     if (d.client.is_admin) {
       document.getElementById('adminBtn').style.display = '';
-      var asel = document.getElementById('adminClient');
       if ((d.client.clients || []).length > 1) {
         asel.style.display = '';
         asel.innerHTML = '';
@@ -1018,7 +1335,7 @@ function load(silent) {
       }
     } else {
       document.getElementById('adminBtn').style.display = 'none';
-      document.getElementById('adminClient').style.display = 'none';
+      asel.style.display = 'none';
     }
     showApp();
     renderStats();
@@ -1026,9 +1343,7 @@ function load(silent) {
   }).catch(function (e) {
     if (e.status === 403) {
       appStarted = false;
-      sb.auth.getUser().then(function (u) {
-        showDenied(u.data.user ? u.data.user.email : null);
-      });
+      sb.auth.getUser().then(function (u) { showDenied(u.data.user ? u.data.user.email : null); });
     } else if (e.status === 401) {
       appStarted = false;
       showGate();
@@ -1041,12 +1356,9 @@ function load(silent) {
   });
 }
 
-var refreshTimer = null;
 async function startApp() {
   if (appStarted) return;
   appStarted = true;
-  // Session exists: show the app shell (with skeletons) right away instead of
-  // flashing the login card while data loads.
   showApp();
   await load();
   if (refreshTimer) clearInterval(refreshTimer);
@@ -1055,86 +1367,8 @@ async function startApp() {
   }, 120000);
 }
 
-document.getElementById('sendLink').addEventListener('click', async function () {
-  var email = document.getElementById('loginEmail').value.trim().toLowerCase();
-  var msg = document.getElementById('loginMsg');
-  if (!email || email.indexOf('@') < 0) { msg.className = 'msg err'; msg.textContent = 'Enter a valid email address.'; return; }
-  var btn = this;
-  btn.disabled = true;
-  msg.className = 'msg info'; msg.textContent = 'Sending…';
-  var res = await sb.auth.signInWithOtp({
-    email: email,
-    options: { emailRedirectTo: location.origin + location.pathname }
-  });
-  btn.disabled = false;
-  if (res.error) {
-    msg.className = 'msg err';
-    msg.textContent = res.error.message.indexOf('rate') >= 0
-      ? 'Email limit reached — the login mailer allows only a few emails per hour. Please try again in about an hour. Once you are in, your session lasts for weeks.'
-      : 'Could not send the email: ' + res.error.message;
-    return;
-  }
-  msg.className = 'msg info';
-  msg.textContent = 'Check your inbox (' + email + ') and click the login link. It may take a minute — check spam too.';
-  document.getElementById('altRow').style.display = 'block';
-});
+/* ---------- admin panel ---------- */
 
-document.getElementById('showCode').addEventListener('click', function () {
-  document.getElementById('codeRow').style.display = 'block';
-  document.getElementById('altRow').style.display = 'none';
-});
-
-document.getElementById('verifyCode').addEventListener('click', async function () {
-  var email = document.getElementById('loginEmail').value.trim().toLowerCase();
-  var code = document.getElementById('loginCode').value.trim();
-  var msg = document.getElementById('loginMsg');
-  if (!email || !code) { msg.className = 'msg err'; msg.textContent = 'Enter your email and the code.'; return; }
-  msg.className = 'msg info'; msg.textContent = 'Verifying…';
-  var res = await sb.auth.verifyOtp({ email: email, token: code, type: 'email' });
-  if (res.error) { msg.className = 'msg err'; msg.textContent = 'Invalid or expired code.'; return; }
-  startApp();
-});
-
-document.getElementById('logout').addEventListener('click', async function () {
-  await sb.auth.signOut();
-  appStarted = false;
-  state.data = null;
-  state.selected = null;
-  state.campaign = 'all';
-  state.filter = 'all';
-  state.q = '';
-  state.adminClientId = null;
-  document.getElementById('search').value = '';
-  document.getElementById('adminBtn').style.display = 'none';
-  document.getElementById('adminClient').style.display = 'none';
-  document.getElementById('adminWrap').style.display = 'none';
-  document.getElementById('main').style.display = 'flex';
-  var tw = document.getElementById('threadWrap');
-  tw.innerHTML = '';
-  var em = el('div', 'empty');
-  em.appendChild(el('div', 'big', '📬'));
-  em.appendChild(el('div', null, 'Select a conversation to read the thread'));
-  tw.appendChild(em);
-  showGate();
-});
-
-document.getElementById('deniedLogout').addEventListener('click', async function () {
-  await sb.auth.signOut();
-  showGate();
-});
-
-document.getElementById('search').addEventListener('input', function (e) {
-  state.q = e.target.value.trim().toLowerCase();
-  renderList();
-});
-document.getElementById('campaignFilter').addEventListener('change', function (e) {
-  state.campaign = e.target.value;
-  renderStats();
-  renderList();
-});
-document.getElementById('refresh').addEventListener('click', function () { load(); });
-
-// ---------- Admin panel ----------
 var adminData = null;
 
 function adminApi(path, body) {
@@ -1173,10 +1407,7 @@ function loadAdmin() {
   document.getElementById('admClients').innerHTML = '<div class="spinner">Loading…</div>';
   document.getElementById('admUnmapped').innerHTML = '<div class="spinner">Checking SmartLead… (a few seconds)</div>';
   document.getElementById('admMapped').innerHTML = '';
-  api('/api/admin/overview').then(function (d) {
-    adminData = d;
-    renderAdmin();
-  }).catch(admErr);
+  api('/api/admin/overview').then(function (d) { adminData = d; renderAdmin(); }).catch(admErr);
 }
 
 function renderAdmin() {
@@ -1184,7 +1415,17 @@ function renderAdmin() {
   wrap.innerHTML = '';
   adminData.clients.forEach(function (c) {
     var card = el('div', 'adm-client');
-    card.appendChild(el('div', 'adm-client-name', c.name));
+    var chead = el('div', 'adm-client-head');
+    if (c.logo_url) {
+      var lg = document.createElement('img');
+      lg.className = 'adm-client-logo';
+      lg.src = c.logo_url;
+      lg.alt = '';
+      chead.appendChild(lg);
+    }
+    chead.appendChild(el('div', 'adm-client-name', c.name));
+    card.appendChild(chead);
+
     adminData.users.filter(function (u) { return u.client_id === c.id; }).forEach(function (u) {
       var row = el('div', 'adm-user');
       row.appendChild(el('span', 'adm-email', u.email));
@@ -1197,8 +1438,7 @@ function renderAdmin() {
         if (accessN) {
           accessBadge.title = adminData.campaigns
             .filter(function (x) { return (u.campaign_ids || []).indexOf(x.id) >= 0; })
-            .map(function (x) { return x.name; })
-            .join('\n');
+            .map(function (x) { return x.name; }).join('\n');
         }
         row.appendChild(accessBadge);
         var lbl = el('label', 'adm-toggle');
@@ -1211,7 +1451,7 @@ function renderAdmin() {
             .catch(function (e) { admErr(e); loadAdmin(); });
         };
         lbl.appendChild(cb);
-        lbl.appendChild(document.createTextNode(' can reply'));
+        lbl.appendChild(document.createTextNode(' can reply & tag'));
         row.appendChild(lbl);
         var rm = el('button', 'adm-x', 'Remove');
         rm.onclick = function () {
@@ -1222,7 +1462,8 @@ function renderAdmin() {
       }
       card.appendChild(row);
     });
-    var ar = el('div', 'adm-adduser');
+
+    var ar = el('div', 'adm-row');
     var em = document.createElement('input');
     em.placeholder = 'email@company.com';
     var lb2 = el('label', 'adm-toggle');
@@ -1231,43 +1472,55 @@ function renderAdmin() {
     lb2.appendChild(cb2);
     lb2.appendChild(document.createTextNode(' reply'));
     var add = el('button', 'adm-add', 'Add user');
-    var campWrap = el('div', 'adm-campwrap');
+    ar.appendChild(em);
+    ar.appendChild(lb2);
+    ar.appendChild(add);
+    card.appendChild(ar);
+
     var campList = el('div', 'adm-camplist');
     var campBoxes = [];
-    adminData.campaigns
-      .filter(function (x) { return x.client_id === c.id; })
-      .forEach(function (cp) {
-        var item = el('label', 'adm-campitem');
-        var box = document.createElement('input');
-        box.type = 'checkbox';
-        box.value = String(cp.id);
-        campBoxes.push(box);
-        item.appendChild(box);
-        var nm = el('span', null, cp.name);
-        nm.title = cp.name;
-        item.appendChild(nm);
-        campList.appendChild(item);
-      });
+    adminData.campaigns.filter(function (x) { return x.client_id === c.id; }).forEach(function (cp) {
+      var item = el('label', 'adm-campitem');
+      var box = document.createElement('input');
+      box.type = 'checkbox';
+      box.value = String(cp.id);
+      campBoxes.push(box);
+      item.appendChild(box);
+      var nm = el('span', null, cp.name);
+      nm.title = cp.name;
+      item.appendChild(nm);
+      campList.appendChild(item);
+    });
     if (!campBoxes.length) campList.appendChild(el('div', 'adm-hint', 'No campaigns mapped to this client yet.'));
-    campWrap.appendChild(campList);
-    campWrap.appendChild(el('div', 'adm-hint',
-      'Campaign access for this user: tick specific campaigns to limit them, or leave ALL unticked to give access to every campaign of this client. To change an existing user’s access, re-add the same email with the new selection.'));
+    card.appendChild(campList);
+    card.appendChild(el('div', 'adm-hint',
+      'Campaign access for the user above: tick specific campaigns to limit them, or leave all unticked for every campaign of this client. To change an existing user, re-add the same email with the new selection.'));
     add.onclick = function () {
       var v = em.value.trim();
       if (!v) return;
       var ids = campBoxes.filter(function (b) { return b.checked; }).map(function (b) { return Number(b.value); });
       adminApi('/api/admin/users', { email: v, client_id: c.id, can_reply: cb2.checked, campaign_ids: ids })
         .then(function () {
-          setAdminStatus('Added ' + v + ' to ' + c.name + (ids.length ? ' (' + ids.length + ' campaign' + (ids.length > 1 ? 's' : '') + ' only)' : ' (all campaigns)'));
+          setAdminStatus('Added ' + v + ' to ' + c.name +
+            (ids.length ? ' (' + ids.length + ' campaign' + (ids.length > 1 ? 's' : '') + ' only)' : ' (all campaigns)'));
           loadAdmin();
-        })
+        }).catch(admErr);
+    };
+
+    var logoRow = el('div', 'adm-row');
+    var logoIn = document.createElement('input');
+    logoIn.placeholder = 'Logo image URL (https://…)';
+    logoIn.value = c.logo_url || '';
+    var logoBtn = el('button', 'adm-add', 'Save logo');
+    logoBtn.onclick = function () {
+      adminApi('/api/admin/clients/logo', { client_id: c.id, logo_url: logoIn.value.trim() })
+        .then(function () { setAdminStatus('Logo updated for ' + c.name); loadAdmin(); })
         .catch(admErr);
     };
-    ar.appendChild(em);
-    ar.appendChild(lb2);
-    ar.appendChild(add);
-    card.appendChild(ar);
-    card.appendChild(campWrap);
+    logoRow.appendChild(logoIn);
+    logoRow.appendChild(logoBtn);
+    card.appendChild(logoRow);
+
     wrap.appendChild(card);
   });
 
@@ -1281,8 +1534,7 @@ function renderAdmin() {
     var info = el('div', 'adm-camp-info');
     info.appendChild(el('div', 'adm-camp-name', c.name));
     info.appendChild(el('div', 'adm-camp-sub',
-      (c.status || '') +
-      (c.tags && c.tags.length ? ' · ' + c.tags.join(', ') : '') +
+      (c.status || '') + (c.tags && c.tags.length ? ' · ' + c.tags.join(', ') : '') +
       ' · ' + (c.sent_count || 0).toLocaleString() + ' sent · ' + (c.reply_count || 0) + ' replies'));
     row.appendChild(info);
     var sel = document.createElement('select');
@@ -1297,10 +1549,9 @@ function renderAdmin() {
       btn.textContent = 'Mapping…';
       adminApi('/api/admin/campaigns/map', { campaign_id: c.id, client_id: sel.value })
         .then(function () {
-          setAdminStatus('"' + c.name + '" mapped. Reply history is backfilling in the background — it appears on the dashboard within a few minutes.');
+          setAdminStatus('"' + c.name + '" mapped. Reply history is backfilling in the background — it appears within a few minutes.');
           loadAdmin();
-        })
-        .catch(function (e) { btn.disabled = false; btn.textContent = 'Map'; admErr(e); });
+        }).catch(function (e) { btn.disabled = false; btn.textContent = 'Map'; admErr(e); });
     };
     row.appendChild(sel);
     row.appendChild(btn);
@@ -1327,22 +1578,119 @@ function renderAdmin() {
   });
 }
 
+/* ---------- wiring ---------- */
+
+document.getElementById('sendLink').addEventListener('click', async function () {
+  var email = document.getElementById('loginEmail').value.trim().toLowerCase();
+  var msg = document.getElementById('loginMsg');
+  if (!email || email.indexOf('@') < 0) { msg.className = 'msg err'; msg.textContent = 'Enter a valid email address.'; return; }
+  var btn = this;
+  btn.disabled = true;
+  msg.className = 'msg info';
+  msg.textContent = 'Sending…';
+  var res = await sb.auth.signInWithOtp({
+    email: email,
+    options: { emailRedirectTo: location.origin + location.pathname }
+  });
+  btn.disabled = false;
+  if (res.error) {
+    msg.className = 'msg err';
+    msg.textContent = res.error.message.indexOf('rate') >= 0
+      ? 'Email limit reached — the login mailer allows only a few emails per hour. Please try again in about an hour. Once you are in, your session lasts for weeks.'
+      : 'Could not send the email: ' + res.error.message;
+    return;
+  }
+  msg.className = 'msg info';
+  msg.textContent = 'Check your inbox (' + email + ') and click the login link. It may take a minute — check spam too.';
+  document.getElementById('altRow').style.display = 'block';
+});
+
+document.getElementById('showCode').addEventListener('click', function () {
+  document.getElementById('codeRow').style.display = 'block';
+  document.getElementById('altRow').style.display = 'none';
+});
+
+document.getElementById('verifyCode').addEventListener('click', async function () {
+  var email = document.getElementById('loginEmail').value.trim().toLowerCase();
+  var code = document.getElementById('loginCode').value.trim();
+  var msg = document.getElementById('loginMsg');
+  if (!email || !code) { msg.className = 'msg err'; msg.textContent = 'Enter your email and the code.'; return; }
+  msg.className = 'msg info';
+  msg.textContent = 'Verifying…';
+  var res = await sb.auth.verifyOtp({ email: email, token: code, type: 'email' });
+  if (res.error) { msg.className = 'msg err'; msg.textContent = 'Invalid or expired code.'; return; }
+  startApp();
+});
+
+document.getElementById('logout').addEventListener('click', async function () {
+  await sb.auth.signOut();
+  appStarted = false;
+  state = { data: null, selected: null, campaign: 'all', q: '', filter: 'all', adminClientId: null };
+  document.getElementById('search').value = '';
+  document.getElementById('adminBtn').style.display = 'none';
+  document.getElementById('adminClient').style.display = 'none';
+  document.getElementById('adminWrap').style.display = 'none';
+  document.getElementById('main').style.display = 'flex';
+  closeDrill();
+  var tw = document.getElementById('threadWrap');
+  tw.innerHTML = '';
+  var em = el('div', 'empty');
+  em.appendChild(el('div', 'big', '📬'));
+  em.appendChild(el('div', null, 'Select a conversation to read the thread'));
+  tw.appendChild(em);
+  showGate();
+});
+
+document.getElementById('deniedLogout').addEventListener('click', async function () {
+  await sb.auth.signOut();
+  showGate();
+});
+
+document.getElementById('search').addEventListener('input', function (e) {
+  state.q = e.target.value.trim().toLowerCase();
+  renderList();
+});
+
+document.getElementById('campaignFilter').addEventListener('change', function (e) {
+  state.campaign = e.target.value;
+  renderStats();
+  renderList();
+});
+
+document.getElementById('refresh').addEventListener('click', function () {
+  var btn = this;
+  if (btn.disabled) return;
+  btn.disabled = true;
+  btn.classList.add('busy');
+  btn.innerHTML = '<span class="spin"></span>Refreshing…';
+  var started = Date.now();
+  load().then(function () {
+    var wait = Math.max(0, 450 - (Date.now() - started));
+    setTimeout(function () {
+      btn.disabled = false;
+      btn.classList.remove('busy');
+      btn.textContent = 'Refresh';
+    }, wait);
+  });
+});
+
 document.getElementById('adminBtn').addEventListener('click', openAdmin);
 document.getElementById('adminBack').addEventListener('click', closeAdmin);
+
 document.getElementById('admAddClient').addEventListener('click', function () {
   var name = document.getElementById('admNewClient').value.trim();
   if (!name) return;
-  adminApi('/api/admin/clients', { name: name })
-    .then(function () {
-      document.getElementById('admNewClient').value = '';
-      setAdminStatus('Client "' + name + '" created — now map campaigns and add user emails.');
-      loadAdmin();
-    })
-    .catch(admErr);
+  adminApi('/api/admin/clients', { name: name }).then(function () {
+    document.getElementById('admNewClient').value = '';
+    setAdminStatus('Client "' + name + '" created — now map campaigns and add user emails.');
+    loadAdmin();
+  }).catch(admErr);
 });
+
 document.getElementById('adminClient').addEventListener('change', function (e) {
   state.adminClientId = e.target.value;
   state.campaign = 'all';
+  state.filter = 'all';
   state.selected = null;
   var tw = document.getElementById('threadWrap');
   tw.innerHTML = '';
@@ -1352,15 +1700,17 @@ document.getElementById('adminClient').addEventListener('change', function (e) {
   tw.appendChild(em);
   load();
 });
-// ---------- end admin panel ----------
+
+document.getElementById('drillClose').addEventListener('click', closeDrill);
+document.getElementById('drillBackdrop').addEventListener('click', closeDrill);
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && document.getElementById('drill').style.display === 'block') closeDrill();
+});
 
 sb.auth.onAuthStateChange(function (event, session) {
   if (session) startApp();
 });
 
-// Fallback for login links opened "late": gotrue-js ignores URL sessions it
-// considers stale, so if tokens are still sitting in the hash after boot,
-// install them manually via setSession (the refresh token does the real work).
 async function tryHashSession() {
   var h = new URLSearchParams((location.hash || '').replace(/^#/, ''));
   var at = h.get('access_token'), rt = h.get('refresh_token');
