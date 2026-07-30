@@ -1270,22 +1270,27 @@ function showApp() {
 
 function renderBrand(client) {
   var logo = document.getElementById('logo');
+  var nameEl = document.getElementById('clientName');
   logo.innerHTML = '';
   if (client.logo_url) {
     logo.className = 'logo has-img';
     var img = document.createElement('img');
     img.src = client.logo_url;
     img.alt = client.name || 'Client logo';
+    // The wordmark already carries the client name, so hide the text label.
+    nameEl.style.display = 'none';
     img.onerror = function () {
       logo.className = 'logo';
       logo.textContent = (client.name || '?')[0].toUpperCase();
+      nameEl.style.display = '';
     };
     logo.appendChild(img);
   } else {
     logo.className = 'logo';
     logo.textContent = (client.name || '?')[0].toUpperCase();
+    nameEl.style.display = '';
   }
-  document.getElementById('clientName').textContent = client.name;
+  nameEl.textContent = client.name;
   document.getElementById('whoami').textContent = client.user_email || '';
   document.title = client.name + ' — Reply Inbox';
 }
