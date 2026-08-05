@@ -232,10 +232,20 @@
   }
   @keyframes shimmer { from { background-position: -400px 0; } to { background-position: 400px 0; } }
 
-  /* ---------- composer ---------- */
-  .composer { background: var(--surface); border-top: 1px solid var(--line); padding: 12px 22px 14px; }
-  .composer.expanded { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; padding: 16px 22px; }
-  .composer.expanded .editor { flex: 1; max-height: none; }
+  /* ---------- composer ----------
+     It sits at the end of the thread and scrolls with it, the way Gmail and every
+     other inbox does. It used to be pinned to the bottom of the pane, permanently
+     eating 200px of reading space, and "expand" covered the whole pane so the
+     message you were replying to disappeared. */
+  .composer { background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: var(--shadow-sm); max-width: 900px; margin: 4px 0 22px; padding: 13px 15px; }
+  .replybar { display: flex; align-items: center; gap: 10px; cursor: text; }
+  .replybar .fake { flex: 1; border: 1px solid #d8dee8; border-radius: 99px; padding: 9px 15px;
+    color: #9ca3af; font-size: 13.5px; background: #fafbfd; }
+  .replybar .fake:hover { background: var(--surface); border-color: #c4ccda; }
+  .composer.open .replybar { display: none; }
+  .composer .writing { display: none; }
+  .composer.open .writing { display: block; }
   section { position: relative; }
   .toolbar { display: flex; gap: 5px; align-items: center; margin-bottom: 8px; max-width: 900px; flex-wrap: wrap; }
   .tbtn {
@@ -252,7 +262,7 @@
   .cclink:hover { text-decoration: underline; }
   .toolbar .right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
   .editor {
-    max-width: 900px; min-height: 190px; max-height: 42vh; overflow-y: auto;
+    max-width: 900px; min-height: 170px; overflow-y: auto;
     border: 1px solid #d8dee8; border-radius: 12px; padding: 13px 15px;
     font-size: 13.5px; line-height: 1.6; background: var(--surface); color: var(--ink);
   }
@@ -378,7 +388,7 @@
     .msgs { padding: 14px 12px 18px; }
     .thread-head { padding: 13px 14px; }
     .composer { padding: 11px 13px 13px; }
-    .editor { min-height: 150px; }
+    .editor { min-height: 140px; }
     header { padding: 10px 13px; }
     #statsBar { padding: 11px 13px 13px; }
     #drill td, #drill th { padding-left: 13px; padding-right: 13px; }
@@ -427,6 +437,10 @@
       <button class="btn" id="refresh">Refresh</button>
       <select id="adminClient" class="ctl" style="display:none" aria-label="Admin: switch client view"></select>
       <button class="btn" id="adminBtn" style="display:none">Admin</button>
+      <a class="btn" id="liLink" href="https://rishabhpandey-hash.github.io/linkedin-inbox/"
+         target="_blank" rel="noopener"
+         title="Opens the LinkedIn reply inbox in a new tab. Separate dashboard, same sign-in email."
+         style="text-decoration:none;display:inline-flex;align-items:center;gap:5px">LinkedIn inbox &#8599;</a>
       <span class="whoami" id="whoami"></span>
       <button class="btn" id="logout">Log out</button>
     </div>
@@ -915,6 +929,15 @@ function bodyFrame(html) {
 
 function buildComposer(conv) {
   var comp = el('div', 'composer');
+
+  // Collapsed to a single line until they actually want to write, so the thread
+  // above stays readable. Clicking it opens the editor in place.
+  var bar = el('div', 'replybar');
+  var fake = el('div', 'fake', 'Reply to ' + (conv.lead_name || conv.lead_email) + '\u2026');
+  bar.appendChild(fake);
+  comp.appendChild(bar);
+  var writing = el('div', 'writing');
+
   var ed = el('div', 'editor');
   ed.contentEditable = 'true';
   ed.setAttribute('data-placeholder', 'Write a reply to ' + (conv.lead_name || conv.lead_email) + '…');
@@ -1065,12 +1088,21 @@ function buildComposer(conv) {
     ccRow.style.display = open ? 'none' : 'flex';
     if (!open) ccIn.focus();
   };
+  // Closing puts the thread back the way it was.
+  expandBtn.textContent = '\u2715';
+  expandBtn.title = 'Close without sending';
   expandBtn.onclick = function () {
-    comp.classList.toggle('expanded');
-    expandBtn.textContent = comp.classList.contains('expanded') ? '⤡' : '⤢';
-    expandBtn.title = comp.classList.contains('expanded') ? 'Shrink the writing area' : 'Expand the writing area';
-    ed.focus();
+    comp.classList.remove('open');
+    ed.innerHTML = '';
   };
+
+  function openComposer() {
+    comp.classList.add('open');
+    ed.focus();
+    comp.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+  bar.onclick = openComposer;
+  comp.openComposer = openComposer;
 
   var sendRow = el('div', 'send-row');
   var btn = el('button', 'send', 'Send reply');
@@ -1111,11 +1143,12 @@ function buildComposer(conv) {
     });
   };
 
-  comp.appendChild(tb);
-  comp.appendChild(ed);
-  comp.appendChild(linkRow);
-  comp.appendChild(ccRow);
-  comp.appendChild(sendRow);
+  writing.appendChild(tb);
+  writing.appendChild(ed);
+  writing.appendChild(linkRow);
+  writing.appendChild(ccRow);
+  writing.appendChild(sendRow);
+  comp.appendChild(writing);
   return comp;
 }
 
@@ -1225,8 +1258,8 @@ function renderThread(d) {
     }
     msgs.appendChild(card);
   });
+  if (canWrite) msgs.appendChild(buildComposer(d.conversation));
   wrap.appendChild(msgs);
-  if (canWrite) wrap.appendChild(buildComposer(d.conversation));
   msgs.scrollTop = msgs.scrollHeight;
 }
 
