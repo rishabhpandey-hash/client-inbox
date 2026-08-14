@@ -528,6 +528,7 @@ var appStarted = false;
 var refreshTimer = null;
 
 async function api(path, opts) {
+  // Applies to admins switching client AND to people who belong to several.
   if (state.adminClientId && path.indexOf('/api/admin/') !== 0) {
     path += (path.indexOf('?') >= 0 ? '&' : '?') + 'client_id=' + encodeURIComponent(state.adminClientId);
   }
@@ -1360,24 +1361,23 @@ function load(silent) {
       state.campaign = 'all';
       if (d.campaigns.length > 1) sel.value = 'all';
     }
+    document.getElementById('adminBtn').style.display = d.client.is_admin ? '' : 'none';
+    // The switcher appears for anyone who has more than one client: admins see every
+    // client, everyone else sees only the ones they belong to (decided server side).
     var asel = document.getElementById('adminClient');
-    if (d.client.is_admin) {
-      document.getElementById('adminBtn').style.display = '';
-      if ((d.client.clients || []).length > 1) {
-        asel.style.display = '';
-        asel.innerHTML = '';
-        d.client.clients.forEach(function (c) {
-          var o = document.createElement('option');
-          o.value = c.id; o.textContent = 'Client: ' + c.name;
-          asel.appendChild(o);
-        });
-        asel.value = d.client.viewing_client_id;
-      } else {
-        asel.style.display = 'none';
-      }
+    var switchable = d.client.clients || [];
+    if (switchable.length > 1) {
+      asel.style.display = '';
+      asel.innerHTML = '';
+      switchable.forEach(function (c) {
+        var o = document.createElement('option');
+        o.value = c.id; o.textContent = 'Client: ' + c.name;
+        asel.appendChild(o);
+      });
+      asel.value = d.client.viewing_client_id;
     } else {
-      document.getElementById('adminBtn').style.display = 'none';
       asel.style.display = 'none';
+      asel.innerHTML = '';
     }
     showApp();
     renderStats();
