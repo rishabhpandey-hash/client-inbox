@@ -6,7 +6,8 @@
   - Authentication: Supabase Auth email OTP. Sign in with the supabase-js SDK
     against window.INBOX_SUPABASE_URL using window.INBOX_SUPABASE_ANON_KEY:
       signInWithOtp({ email, options:{ emailRedirectTo: <this page url> } })
-      then click the emailed link, or verifyOtp({ email, token, type:'email' }).
+      then verifyOtp({ email, token, type:'email' }) with the 6-digit code from
+      the email. (A magic link still works if the email template renders one.)
     Access is whitelist-based: only emails registered by the agency get data.
   - Data source (JSON API). All calls require the header
     "Authorization: Bearer <supabase_access_token>":
@@ -405,20 +406,19 @@
     <div id="loginForm" style="display:none">
       <label for="loginEmail">Work email</label>
       <input id="loginEmail" type="email" placeholder="you@company.com" autocomplete="email">
-      <button class="primary" id="sendLink">Email me a login link</button>
+      <button class="primary" id="sendLink">Email me a code</button>
       <div id="codeRow">
-        <label for="loginCode">6-digit code (if your email shows one)</label>
-        <input id="loginCode" inputmode="numeric" placeholder="123456">
+        <label for="loginCode">Enter the 6-digit code</label>
+        <input id="loginCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456">
         <button class="primary" id="verifyCode">Verify code</button>
       </div>
       <div class="msg" id="loginMsg"></div>
-      <div class="alt" id="altRow" style="display:none"><a id="showCode">Have a code instead?</a></div>
     </div>
     <div id="deniedBox" style="display:none">
       <div class="msg err" id="deniedMsg"></div>
       <button class="primary" id="deniedLogout" style="margin-top:16px">Use a different email</button>
     </div>
-    <div class="foot">Access is by invitation only.<br>No password needed — the login link is your key.</div>
+    <div class="foot">Access is by invitation only.<br>No password needed — we email you a one-time code.</div>
   </div>
 </div>
 
@@ -1643,13 +1643,9 @@ document.getElementById('sendLink').addEventListener('click', async function () 
     return;
   }
   msg.className = 'msg info';
-  msg.textContent = 'Check your inbox (' + email + ') and click the login link. It may take a minute — check spam too.';
-  document.getElementById('altRow').style.display = 'block';
-});
-
-document.getElementById('showCode').addEventListener('click', function () {
+  msg.textContent = 'We sent a 6-digit code to ' + email + '. Enter it below. It may take a minute — check spam too.';
   document.getElementById('codeRow').style.display = 'block';
-  document.getElementById('altRow').style.display = 'none';
+  document.getElementById('loginCode').focus();
 });
 
 document.getElementById('verifyCode').addEventListener('click', async function () {
@@ -1662,6 +1658,14 @@ document.getElementById('verifyCode').addEventListener('click', async function (
   var res = await sb.auth.verifyOtp({ email: email, token: code, type: 'email' });
   if (res.error) { msg.className = 'msg err'; msg.textContent = 'Invalid or expired code.'; return; }
   startApp();
+});
+
+document.getElementById('loginEmail').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') document.getElementById('sendLink').click();
+});
+
+document.getElementById('loginCode').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') document.getElementById('verifyCode').click();
 });
 
 document.getElementById('logout').addEventListener('click', async function () {
