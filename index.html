@@ -529,6 +529,14 @@ var state = { data: null, selected: null, campaign: 'all', q: '', filter: 'all',
 var appStarted = false;
 var refreshTimer = null;
 
+// Deep link (used by channel alerts): ?open=<conversation id> opens that thread
+// once signed in; ?client_id=<uuid> lands people who belong to several clients on
+// the right one first. The server ignores a client_id the caller doesn't belong
+// to, so a forwarded link degrades to the person's own inbox.
+var deepParams = new URLSearchParams(location.search);
+var deepOpen = deepParams.get('open');
+if (deepParams.get('client_id')) state.adminClientId = deepParams.get('client_id');
+
 async function api(path, opts) {
   // Applies to admins switching client AND to people who belong to several.
   if (state.adminClientId && path.indexOf('/api/admin/') !== 0) {
@@ -1405,6 +1413,13 @@ async function startApp() {
   appStarted = true;
   showApp();
   await load();
+  if (deepOpen && state.data) {
+    var deepId = deepOpen;
+    deepOpen = null;
+    openThread(deepId);
+    // One-shot: keep the address bar clean so a refresh shows the normal inbox.
+    history.replaceState(null, '', location.pathname);
+  }
   if (refreshTimer) clearInterval(refreshTimer);
   refreshTimer = setInterval(function () {
     if (document.getElementById('app').style.display !== 'none') load(true);
