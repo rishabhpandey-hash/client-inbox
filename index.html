@@ -159,7 +159,10 @@
   /* Wraps rather than scrolls: the previous row scrolled horizontally with the
      scrollbar hidden, so with a mouse there was no way to tell that filters
      existed past the right edge. Every chip is now visible at once. */
-  .filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 14px 10px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 14px 10px; align-items: center; }
+  .catsel { border: 1px solid #d8dee8; background: var(--surface); color: var(--ink-2);
+    border-radius: 99px; font-size: 11px; font-weight: 600; padding: 4.5px 9px; max-width: 190px; }
+  .catsel.on { background: #eef2ff; border-color: #c7d2fe; color: var(--brand); }
   .filters::-webkit-scrollbar { display: none; }
   .fchip {
     font-size: 11px; font-weight: 600; padding: 4.5px 11px; border-radius: 99px;
@@ -180,8 +183,9 @@
   .row1 { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
   .row1 .name { font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .row1 .time { font-size: 11px; color: var(--ink-4); flex: none; }
-  .subj { font-size: 12.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2.5px; }
-  .prev { font-size: 12px; color: #7c8698; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+  .subj { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2.5px; }
+  .subj-t { color: var(--ink-2); }
+  .subj-d, .subj-p { color: #7c8698; }
   .badges { margin-top: 7px; display: flex; gap: 5px; flex-wrap: wrap; }
   .badge {
     font-size: 10.5px; font-weight: 600; padding: 2.5px 9px; border-radius: 99px;
@@ -290,8 +294,10 @@
   .editor:focus { outline: none; border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(99,102,241,.15); }
   .editor a { color: var(--brand); }
   .editor ul, .editor ol { padding-left: 22px; margin: 6px 0; }
-  .cc-row { display: none; gap: 8px; margin-top: 8px; max-width: 900px; flex-wrap: wrap; }
-  .cc-row input { flex: 1; min-width: 220px; border: 1px solid #d8dee8; border-radius: 8px; padding: 8px 11px; font-size: 12.5px; color: var(--ink); }
+  .cc-row { display: none; margin: 0 0 10px; max-width: 900px; }
+  .addr-line { display: none; align-items: center; gap: 9px; padding-bottom: 8px; }
+  .addr-label { font-size: 11.5px; font-weight: 600; color: var(--ink-4); width: 26px; flex: none; }
+  .cc-row input { flex: 1; min-width: 0; border: 1px solid #d8dee8; border-radius: 8px; padding: 8px 11px; font-size: 12.5px; color: var(--ink); }
   .cc-row input:focus { outline: none; border-color: #a5b4fc; }
   .link-row { display: none; gap: 8px; margin-top: 8px; max-width: 900px; align-items: center; flex-wrap: wrap; }
   .link-row input { flex: 1; min-width: 240px; border: 1px solid #d8dee8; border-radius: 8px; padding: 8px 11px; font-size: 12.5px; }
@@ -356,13 +362,21 @@
   .adm-row { display: flex; gap: 8px; margin-top: 9px; align-items: center; flex-wrap: wrap; }
   .adm-row input { flex: 1; min-width: 170px; border: 1px solid #d8dee8; border-radius: 8px; padding: 8px 10px; font-size: 12.5px; }
   .adm-row input:focus { outline: none; border-color: #a5b4fc; }
+  .adm-client-sum { font-size: 11px; color: var(--ink-4); margin-left: auto; white-space: nowrap; }
+  .adm-actions { display: flex; gap: 7px; padding: 4px 0 10px; }
+  .adm-ghost { border: 1px solid #d8dee8; background: var(--surface); color: var(--ink-2);
+    border-radius: 8px; padding: 6px 11px; font-size: 12px; font-weight: 600; }
+  .adm-ghost:hover { background: #f4f6fa; }
+  .adm-ghost.on { background: #eef2ff; border-color: #c7d2fe; color: var(--brand); }
+  .adm-collapse { display: none; }
+  .adm-collapse.open { display: block; }
   .adm-access { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 0 9px 2px; margin-top: -3px; }
   .adm-access-all { font-size: 11.5px; color: var(--ink-4); }
   .adm-cchip { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 99px;
     background: #eef2ff; color: #4338ca; border: 1px solid #e0e7ff; }
   .adm-cchip.stale { background: #fef3c7; color: #92400e; border-color: #fde68a; }
-  .adm-editor { border: 1px solid #d8dee8; border-radius: 10px; padding: 10px 12px;
-    background: #fafbfd; margin: 0 0 12px; }
+  .adm-editor { border: 1px solid #d8dee8; border-left: 3px solid var(--brand);
+    border-radius: 10px; padding: 10px 12px; background: #fafbfd; margin: 0 0 12px 14px; }
   .adm-hint { font-size: 11px; color: var(--ink-4); line-height: 1.5; margin: 8px 0 4px; }
   .adm-camplist { border: 1px solid #d8dee8; border-radius: 8px; padding: 6px 10px; max-height: 132px; overflow-y: auto; background: #fafbfd; margin-top: 8px; }
   .adm-campitem { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2); padding: 3.5px 0; cursor: pointer; }
@@ -945,9 +959,6 @@ function renderFilters(base) {
     ['needs_reply', 'Needs reply', base.filter(needsReply).length],
     ['positive', 'Positive', base.filter(function (c) { return isPositive(c.lead_category); }).length]
   ];
-  var cats = {};
-  base.forEach(function (c) { if (c.lead_category) cats[c.lead_category] = (cats[c.lead_category] || 0) + 1; });
-  Object.keys(cats).sort().forEach(function (k) { defs.push(['cat:' + k, k, cats[k]]); });
   defs.forEach(function (d) {
     if (d[0] !== 'all' && !d[2] && state.filter !== d[0]) return;
     var b = el('button', 'fchip' + (state.filter === d[0] ? ' on' : ''), d[1] + ' · ' + d[2]);
@@ -956,6 +967,31 @@ function renderFilters(base) {
     b.onclick = function () { setFilter(d[0]); };
     wrap.appendChild(b);
   });
+
+  // Every tag as its own chip meant eleven chips over four rows -- most of them
+  // things nobody filters by (232 out-of-office, 151 wrong person). The four
+  // above are the working states; the full tag list belongs in a picker.
+  var cats = {};
+  base.forEach(function (c) { if (c.lead_category) cats[c.lead_category] = (cats[c.lead_category] || 0) + 1; });
+  var names = Object.keys(cats).sort();
+  if (names.length) {
+    var sel = document.createElement('select');
+    sel.className = 'catsel';
+    sel.setAttribute('aria-label', 'Filter by tag');
+    var o0 = document.createElement('option');
+    o0.value = ''; o0.textContent = 'Any tag';
+    sel.appendChild(o0);
+    names.forEach(function (k) {
+      var op = document.createElement('option');
+      op.value = 'cat:' + k;
+      op.textContent = k + ' (' + cats[k] + ')';
+      sel.appendChild(op);
+    });
+    sel.value = state.filter.indexOf('cat:') === 0 ? state.filter : '';
+    if (sel.value) sel.classList.add('on');
+    sel.onchange = function () { setFilter(sel.value || 'all'); };
+    wrap.appendChild(sel);
+  }
 }
 
 function renderList() {
@@ -1003,8 +1039,16 @@ function renderList() {
     r1.appendChild(el('div', 'name', c.lead_name || c.lead_email));
     r1.appendChild(el('div', 'time', fmtShort(c.last_message_at)));
     meta.appendChild(r1);
-    if (c.subject) meta.appendChild(el('div', 'subj', c.subject));
-    if (c.last_message_preview) meta.appendChild(el('div', 'prev', c.last_message_preview));
+    if (c.subject || c.last_message_preview) {
+      var line = el('div', 'subj');
+      if (c.subject) line.appendChild(el('span', 'subj-t', c.subject));
+      if (c.subject && c.last_message_preview) line.appendChild(el('span', 'subj-d', ' \u2014 '));
+      if (c.last_message_preview) line.appendChild(el('span', 'subj-p', c.last_message_preview));
+      meta.appendChild(line);
+    }
+    // Only badges that change what you do next. The reply count was noise (it is
+    // on screen the moment you open the thread) and the campaign name repeated
+    // itself on every row unless you are actually looking across campaigns.
     var badges = el('div', 'badges');
     if (c.lead_category) {
       badges.appendChild(el('span', 'badge ' + (catCls(c.lead_category) || ''), c.lead_category));
@@ -1012,8 +1056,7 @@ function renderList() {
       badges.appendChild(el('span', 'badge amber', 'Not tagged'));
     }
     if (needsReply(c)) badges.appendChild(el('span', 'badge wait', 'Awaiting your reply'));
-    badges.appendChild(el('span', 'badge', c.reply_count + (c.reply_count === 1 ? ' reply' : ' replies')));
-    if (camp && camp.name) {
+    if (camp && camp.name && state.campaign === 'all') {
       var cb = el('span', 'badge campaign', camp.name);
       cb.title = 'Campaign: ' + camp.name;
       badges.appendChild(cb);
@@ -1160,8 +1203,10 @@ function buildComposer(conv) {
 
   // Cc/Bcc and close belong in the composer header, not in the formatting bar --
   // that bar is hidden until asked for, so controls buried in it would vanish.
-  var ccBtn = el('button', 'cclink', 'Cc / Bcc');
+  var ccBtn = el('button', 'cclink', 'Add Cc');
   ccBtn.type = 'button';
+  var bccBtn = el('button', 'cclink', 'Add Bcc');
+  bccBtn.type = 'button';
   var expandBtn = el('button', 'tbtn', '\u2715');
   expandBtn.type = 'button';
 
@@ -1195,6 +1240,8 @@ function buildComposer(conv) {
   linkRow.appendChild(linkCancel);
 
   var ccRow = el('div', 'cc-row');
+  var ccLine = el('div', 'addr-line');
+  var bccLine = el('div', 'addr-line');
   var ccIn = document.createElement('input');
   ccIn.placeholder = 'Cc — type or paste addresses, comma separated';
   var bccIn = document.createElement('input');
@@ -1210,13 +1257,23 @@ function buildComposer(conv) {
     inp.addEventListener('focus', function () { inp.removeAttribute('readonly'); });
     inp.addEventListener('blur', function () { inp.setAttribute('readonly', 'readonly'); });
   });
-  ccRow.appendChild(ccIn);
-  ccRow.appendChild(bccIn);
-  ccBtn.onclick = function () {
-    var open = ccRow.style.display === 'flex';
-    ccRow.style.display = open ? 'none' : 'flex';
-    if (!open) ccIn.focus();
-  };
+  ccLine.appendChild(el('span', 'addr-label', 'Cc'));
+  ccLine.appendChild(ccIn);
+  bccLine.appendChild(el('span', 'addr-label', 'Bcc'));
+  bccLine.appendChild(bccIn);
+  ccRow.appendChild(ccLine);
+  ccRow.appendChild(bccLine);
+  // Two separate buttons, so "add a Cc" is one obvious click and Bcc is not
+  // hidden behind a combined label.
+  function showAddr(which) {
+    ccRow.style.display = 'block';
+    var line = which === 'bcc' ? bccLine : ccLine;
+    line.style.display = 'flex';
+    (which === 'bcc' ? bccIn : ccIn).focus();
+    ccBtn.style.display = ccLine.style.display === 'flex' ? 'none' : '';
+    bccBtn.style.display = bccLine.style.display === 'flex' ? 'none' : '';
+  }
+  ccBtn.onclick = function () { showAddr('cc'); };
   // Closing used to bin whatever had been typed, with no warning -- easy to lose
   // a long reply to a stray click. Only an empty draft closes silently.
   expandBtn.title = 'Close without sending';
@@ -1245,7 +1302,9 @@ function buildComposer(conv) {
   if (conv.lead_name) to.appendChild(el('span', 'cmp-toaddr', '<' + conv.lead_email + '>'));
   head.appendChild(to);
   head.appendChild(ccBtn);
+  head.appendChild(bccBtn);
   head.appendChild(expandBtn);
+  bccBtn.onclick = function () { showAddr('bcc'); };
 
   var sendRow = el('div', 'send-row');
   var btn = el('button', 'send', 'Send');
@@ -1620,9 +1679,18 @@ function loadAdmin() {
   api('/api/admin/overview').then(function (d) { adminData = d; renderAdmin(); }).catch(admErr);
 }
 
+// Every collapsible section in the panel registers its closer here, so opening
+// one closes the rest. Two similar tick lists on screen at once made it look as
+// though "Edit access" had failed to pre-tick anything.
+var admPanels = [];
+function closeAdminPanels(except) {
+  admPanels.forEach(function (fn) { if (fn !== except) fn(); });
+}
+
 function renderAdmin() {
   var wrap = document.getElementById('admClients');
   wrap.innerHTML = '';
+  admPanels = [];
   adminData.clients.forEach(function (c) {
     var card = el('div', 'adm-client');
     var chead = el('div', 'adm-client-head');
@@ -1634,6 +1702,10 @@ function renderAdmin() {
       chead.appendChild(lg);
     }
     chead.appendChild(el('div', 'adm-client-name', c.name));
+    var uCount = adminData.users.filter(function (u) { return u.client_id === c.id; }).length;
+    var cCount = adminData.campaigns.filter(function (x) { return x.client_id === c.id; }).length;
+    chead.appendChild(el('span', 'adm-client-sum',
+      uCount + (uCount === 1 ? ' user' : ' users') + ' · ' + cCount + (cCount === 1 ? ' campaign' : ' campaigns')));
     card.appendChild(chead);
 
     adminData.users.filter(function (u) { return u.client_id === c.id; }).forEach(function (u) {
@@ -1719,8 +1791,14 @@ function renderAdmin() {
         ed.appendChild(edRow);
         card.appendChild(ed);
 
+        var closeEd = function () { ed.style.display = 'none'; edit.textContent = 'Edit access'; };
+        admPanels.push(closeEd);
         edit.onclick = function () {
           var open = ed.style.display !== 'none';
+          closeAdminPanels(closeEd);
+          // Re-tick from the live scope every time it opens, so what is shown is
+          // always this person's current access rather than a stale selection.
+          boxes.forEach(function (b) { b.checked = scope2.indexOf(Number(b.value)) >= 0; });
           ed.style.display = open ? 'none' : 'block';
           edit.textContent = open ? 'Edit access' : 'Close';
         };
@@ -1748,6 +1826,16 @@ function renderAdmin() {
       }
     });
 
+    // Actions row. The add-user form and the logo field used to sit permanently
+    // open under every client, which is most of what made this page a wall.
+    var actions = el('div', 'adm-actions');
+    var addToggle = el('button', 'adm-ghost', '+ Add user');
+    var brandToggle = el('button', 'adm-ghost', 'Branding');
+    actions.appendChild(addToggle);
+    actions.appendChild(brandToggle);
+    card.appendChild(actions);
+
+    var addWrap = el('div', 'adm-collapse');
     var ar = el('div', 'adm-row');
     var em = document.createElement('input');
     em.placeholder = 'email@company.com';
@@ -1760,7 +1848,7 @@ function renderAdmin() {
     ar.appendChild(em);
     ar.appendChild(lb2);
     ar.appendChild(add);
-    card.appendChild(ar);
+    addWrap.appendChild(ar);
 
     var campList = el('div', 'adm-camplist');
     var campBoxes = [];
@@ -1777,9 +1865,25 @@ function renderAdmin() {
       campList.appendChild(item);
     });
     if (!campBoxes.length) campList.appendChild(el('div', 'adm-hint', 'No campaigns mapped to this client yet.'));
-    card.appendChild(campList);
-    card.appendChild(el('div', 'adm-hint',
-      'Campaign access for the user above: tick specific campaigns to limit them, or leave all unticked for every campaign of this client. To change an existing user, re-add the same email with the new selection.'));
+    addWrap.appendChild(campList);
+    addWrap.appendChild(el('div', 'adm-hint',
+      'Tick campaigns to limit this person, or leave all unticked to give them every campaign of this client, including future ones.'));
+    card.appendChild(addWrap);
+
+    var closeAdd = function () {
+      addWrap.classList.remove('open');
+      addToggle.classList.remove('on');
+      addToggle.textContent = '+ Add user';
+    };
+    admPanels.push(closeAdd);
+    addToggle.onclick = function () {
+      var open = addWrap.classList.contains('open');
+      closeAdminPanels(closeAdd);
+      addWrap.classList.toggle('open', !open);
+      addToggle.classList.toggle('on', !open);
+      addToggle.textContent = open ? '+ Add user' : 'Cancel';
+      if (!open) em.focus();
+    };
     add.onclick = function () {
       var v = em.value.trim();
       if (!v) return;
@@ -1792,6 +1896,7 @@ function renderAdmin() {
         }).catch(admErr);
     };
 
+    var brandWrap = el('div', 'adm-collapse');
     var logoRow = el('div', 'adm-row');
     var logoIn = document.createElement('input');
     logoIn.placeholder = 'Logo image URL (https://…)';
@@ -1804,7 +1909,19 @@ function renderAdmin() {
     };
     logoRow.appendChild(logoIn);
     logoRow.appendChild(logoBtn);
-    card.appendChild(logoRow);
+    brandWrap.appendChild(logoRow);
+    brandWrap.appendChild(el('div', 'adm-hint',
+      'Shown in the header of this client\u2019s dashboard. Leave blank to fall back to their initial.'));
+    card.appendChild(brandWrap);
+
+    var closeBrand = function () { brandWrap.classList.remove('open'); brandToggle.classList.remove('on'); };
+    admPanels.push(closeBrand);
+    brandToggle.onclick = function () {
+      var open = brandWrap.classList.contains('open');
+      closeAdminPanels(closeBrand);
+      brandWrap.classList.toggle('open', !open);
+      brandToggle.classList.toggle('on', !open);
+    };
 
     wrap.appendChild(card);
   });
