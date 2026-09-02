@@ -929,7 +929,24 @@ function renderList() {
 function bodyFrame(html) {
   var f = document.createElement('iframe');
   f.setAttribute('sandbox', 'allow-same-origin allow-popups');
-  f.srcdoc = '<html><head><base target="_blank"><style>body{margin:14px 16px;font:13.5px/1.6 Inter,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1f2937;word-break:break-word}img{max-width:100%;height:auto}a{color:#4f46e5}blockquote{border-left:3px solid #e5e7eb;margin:8px 0;padding-left:12px;color:#6b7280}</style></head><body>' + (html || '') + '</body></html>';
+  // Every message arrives as sender HTML carrying its OWN typography -- Gmail
+  // injects arial, Outlook Calibri, our own sequence sets line-height:1.15, and
+  // quoted replies nest several of them. Styling only `body` (as this used to)
+  // left each message, and parts within a message, rendering differently.
+  // So the thread's typography is forced over the inline styles: !important is
+  // required precisely because the sender's values arrive inline. Note `body`
+  // itself is excluded from the size/leading reset -- it holds the 13.5px/1.6 the
+  // descendants then inherit. Weight, italics and colour are deliberately left
+  // alone so bold, links and quoted-text greys still carry meaning.
+  var FONT = "Inter,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif";
+  f.srcdoc = '<html><head><base target="_blank"><style>'
+    + 'body{margin:14px 16px;font:13.5px/1.6 ' + FONT + ';color:#1f2937;word-break:break-word}'
+    + 'body,body *{font-family:' + FONT + ' !important}'
+    + 'body *{font-size:inherit !important;line-height:inherit !important}'
+    + 'img{max-width:100%;height:auto}a{color:#4f46e5}'
+    + 'table{max-width:100%}'
+    + 'blockquote{border-left:3px solid #e5e7eb;margin:8px 0;padding-left:12px;color:#6b7280}'
+    + '</style></head><body>' + (html || '') + '</body></html>';
   f.style.height = '80px';
   f.onload = function () {
     try { f.style.height = Math.min(1400, f.contentDocument.body.scrollHeight + 34) + 'px'; }
