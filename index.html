@@ -6,10 +6,11 @@
   - Authentication: Supabase Auth email OTP. Sign in with the supabase-js SDK
     against window.INBOX_SUPABASE_URL using window.INBOX_SUPABASE_ANON_KEY:
       signInWithOtp({ email, options:{ emailRedirectTo: <this page url> } })
-      The Supabase email template currently renders a MAGIC LINK only, so the
-      link is the primary path. The 6-digit code box is a fallback that starts
-      working only once {{ .Token }} is added to that template; it then calls
-      verifyOtp({ email, token, type:'email' }).
+      The email template renders a MAGIC LINK only, so the link is the ONLY
+      path. There is deliberately no code-entry UI: it could never work while
+      the template lacks {{ .Token }}, and offering it read as a required step.
+      If a token is ever added to the template, re-introduce a code field and
+      call verifyOtp({ email, token, type:'email' }).
     Access is whitelist-based: only emails registered by the agency get data.
   - Data source (JSON API). All calls require the header
     "Authorization: Bearer <supabase_access_token>":
