@@ -155,7 +155,10 @@
   aside { width: 392px; flex: none; background: var(--surface); border-right: 1px solid var(--line); overflow-y: auto; }
   .listhead { position: sticky; top: 0; background: var(--surface); z-index: 2; border-bottom: 1px solid var(--line-2); }
   .count { padding: 11px 18px 6px; font-size: 10.5px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-4); }
-  .filters { display: flex; gap: 6px; padding: 2px 14px 10px; overflow-x: auto; scrollbar-width: none; }
+  /* Wraps rather than scrolls: the previous row scrolled horizontally with the
+     scrollbar hidden, so with a mouse there was no way to tell that filters
+     existed past the right edge. Every chip is now visible at once. */
+  .filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 14px 10px; }
   .filters::-webkit-scrollbar { display: none; }
   .fchip {
     font-size: 11px; font-weight: 600; padding: 4.5px 11px; border-radius: 99px;
@@ -339,6 +342,14 @@
   .adm-row { display: flex; gap: 8px; margin-top: 9px; align-items: center; flex-wrap: wrap; }
   .adm-row input { flex: 1; min-width: 170px; border: 1px solid #d8dee8; border-radius: 8px; padding: 8px 10px; font-size: 12.5px; }
   .adm-row input:focus { outline: none; border-color: #a5b4fc; }
+  .adm-access { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 0 9px 2px; margin-top: -3px; }
+  .adm-access-all { font-size: 11.5px; color: var(--ink-4); }
+  .adm-cchip { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 99px;
+    background: #eef2ff; color: #4338ca; border: 1px solid #e0e7ff; }
+  .adm-cchip.stale { background: #fef3c7; color: #92400e; border-color: #fde68a; }
+  .adm-editor { border: 1px solid #d8dee8; border-radius: 10px; padding: 10px 12px;
+    background: #fafbfd; margin: 0 0 12px; }
+  .adm-hint { font-size: 11px; color: var(--ink-4); line-height: 1.5; margin: 8px 0 4px; }
   .adm-camplist { border: 1px solid #d8dee8; border-radius: 8px; padding: 6px 10px; max-height: 132px; overflow-y: auto; background: #fafbfd; margin-top: 8px; }
   .adm-campitem { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2); padding: 3.5px 0; cursor: pointer; }
   .adm-campitem input { flex: none; cursor: pointer; }
@@ -376,7 +387,16 @@
   .card .alt { margin-top: 16px; font-size: 12px; color: var(--ink-4); text-align: center; }
   .card .alt a { color: var(--brand); cursor: pointer; text-decoration: none; font-weight: 600; }
   .card .foot { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line-2); font-size: 11px; color: var(--ink-4); text-align: center; line-height: 1.5; }
-  #codeRow { display: none; margin-top: 14px; }
+  /* Sign-in confirmation. Deliberately a distinct state rather than a line of
+     text under the form: the old version left an unusable "enter your 6-digit
+     code" box on screen, which read as the next required step. */
+  .card .sent-mark { width: 46px; height: 46px; margin: 2px auto 14px; border-radius: 99px;
+    background: #dcfce7; color: #15803d; font-size: 22px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; }
+  .card .sent-title { font-size: 17px; font-weight: 800; text-align: center; letter-spacing: -0.02em; }
+  .card .sent-body { font-size: 13.5px; color: var(--ink-2); text-align: center; margin-top: 8px; line-height: 1.6; }
+  .card .sent-body b { color: var(--ink); }
+  .card .sent-hint { font-size: 12px; color: var(--ink-4); text-align: center; margin-top: 12px; line-height: 1.55; }
 
   @media (max-width: 860px) {
     #search { width: 150px; }
@@ -394,7 +414,7 @@
     .tagbox select { min-height: 34px; font-size: 12.5px; }
     .cclink { min-height: 34px; }
     .send { min-height: 42px; }
-    .chip { min-height: 34px; display: inline-flex; align-items: center; }
+    .fchip { min-height: 34px; display: inline-flex; align-items: center; }
     /* The header stacked to ~380px of an 812px screen, pushing the list below
        the fold before anything had loaded. */
     .brand .sub { display: none; }
@@ -432,12 +452,16 @@
       <label for="loginEmail">Work email</label>
       <input id="loginEmail" type="email" placeholder="you@company.com" autocomplete="email">
       <button class="primary" id="sendLink">Email me a sign-in link</button>
-      <div id="codeRow">
-        <label for="loginCode">Or, if your email shows a 6-digit code, enter it here</label>
-        <input id="loginCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456">
-        <button class="primary" id="verifyCode">Verify code</button>
-      </div>
       <div class="msg" id="loginMsg"></div>
+    </div>
+    <div id="sentBox" style="display:none">
+      <div class="sent-mark">&#10003;</div>
+      <h2 class="sent-title">Check your email</h2>
+      <div class="sent-body">We sent a sign-in link to<br><b id="sentTo"></b></div>
+      <div class="sent-hint">Open it on this device to sign in. It can take a minute to
+        arrive &mdash; if it isn't there, check your spam folder.</div>
+      <button class="primary" id="resendLink">Resend link</button>
+      <div class="alt"><a id="useOther">Use a different email</a></div>
     </div>
     <div id="deniedBox" style="display:none">
       <div class="msg err" id="deniedMsg"></div>
@@ -1374,6 +1398,8 @@ function showGate() {
   document.getElementById('gate').style.display = 'flex';
   document.getElementById('bootMsg').style.display = 'none';
   document.getElementById('loginForm').style.display = 'block';
+  document.getElementById('sentBox').style.display = 'none';
+  if (resendTimer) { clearInterval(resendTimer); resendTimer = null; }
   document.getElementById('deniedBox').style.display = 'none';
 }
 
@@ -1382,6 +1408,7 @@ function showDenied(email) {
   document.getElementById('gate').style.display = 'flex';
   document.getElementById('bootMsg').style.display = 'none';
   document.getElementById('loginForm').style.display = 'none';
+  document.getElementById('sentBox').style.display = 'none';
   document.getElementById('deniedBox').style.display = 'block';
   document.getElementById('deniedMsg').textContent =
     (email || 'This account') + ' does not have access to any campaign inbox. Ask your agency to add your email, then sign in again.';
@@ -1574,14 +1601,10 @@ function renderAdmin() {
       if (u.is_admin) {
         row.appendChild(el('span', 'badge blue', 'admin'));
       } else {
-        var accessN = (u.campaign_ids && u.campaign_ids.length) ? u.campaign_ids.length : 0;
+        var scope = (u.campaign_ids || []).map(Number);
+        var accessN = scope.length;
         var accessBadge = el('span', 'badge' + (accessN ? ' campaign' : ''),
           accessN ? accessN + ' campaign' + (accessN > 1 ? 's' : '') : 'All campaigns');
-        if (accessN) {
-          accessBadge.title = adminData.campaigns
-            .filter(function (x) { return (u.campaign_ids || []).indexOf(x.id) >= 0; })
-            .map(function (x) { return x.name; }).join('\n');
-        }
         row.appendChild(accessBadge);
         var lbl = el('label', 'adm-toggle');
         var cb = document.createElement('input');
@@ -1595,14 +1618,93 @@ function renderAdmin() {
         lbl.appendChild(cb);
         lbl.appendChild(document.createTextNode(' can reply & tag'));
         row.appendChild(lbl);
+        var edit = el('button', 'adm-x', 'Edit access');
         var rm = el('button', 'adm-x', 'Remove');
         rm.onclick = function () {
           if (!confirm('Remove access for ' + u.email + '?')) return;
-          adminApi('/api/admin/users/delete', { email: u.email }).then(loadAdmin).catch(admErr);
+          adminApi('/api/admin/users/delete', { email: u.email, client_id: c.id })
+            .then(loadAdmin).catch(admErr);
         };
+        row.appendChild(edit);
         row.appendChild(rm);
       }
       card.appendChild(row);
+
+      // Campaign names, visible without hovering. Whoever is covering for
+      // Rishabh has to be able to read a user's access at a glance.
+      if (!u.is_admin) {
+        var scope2 = (u.campaign_ids || []).map(Number);
+        var clientCamps = adminData.campaigns.filter(function (x) { return x.client_id === c.id; });
+        var listWrap = el('div', 'adm-access');
+        if (!scope2.length) {
+          listWrap.appendChild(el('span', 'adm-access-all',
+            'Sees all ' + clientCamps.length + ' campaigns of this client, including any added later.'));
+        } else {
+          clientCamps.filter(function (x) { return scope2.indexOf(Number(x.id)) >= 0; })
+            .forEach(function (x) { listWrap.appendChild(el('span', 'adm-cchip', x.name)); });
+          var missing = scope2.filter(function (id) {
+            return !clientCamps.some(function (x) { return Number(x.id) === id; }); });
+          if (missing.length) {
+            listWrap.appendChild(el('span', 'adm-cchip stale', missing.length + ' unmapped'));
+          }
+        }
+        card.appendChild(listWrap);
+
+        // In-place editor. Pre-ticked with what they have now, which is the whole
+        // point: the old flow forced a delete + re-add and lost the reply flag.
+        var ed = el('div', 'adm-editor');
+        ed.style.display = 'none';
+        var boxes = [];
+        clientCamps.forEach(function (x) {
+          var lab = el('label', 'adm-campitem');
+          var b = document.createElement('input');
+          b.type = 'checkbox';
+          b.value = String(x.id);
+          b.checked = scope2.indexOf(Number(x.id)) >= 0;
+          boxes.push(b);
+          lab.appendChild(b);
+          lab.appendChild(el('span', null, x.name + (x.status ? ' · ' + x.status : '')));
+          ed.appendChild(lab);
+        });
+        var edHint = el('div', 'adm-hint',
+          'Tick the campaigns this person may see. Leaving every box unticked gives them ' +
+          'ALL campaigns of this client, including future ones.');
+        ed.appendChild(edHint);
+        var edRow = el('div', 'adm-row');
+        var save = el('button', 'adm-add', 'Save access');
+        var cancel = el('button', 'adm-x', 'Cancel');
+        edRow.appendChild(save);
+        edRow.appendChild(cancel);
+        ed.appendChild(edRow);
+        card.appendChild(ed);
+
+        edit.onclick = function () {
+          var open = ed.style.display !== 'none';
+          ed.style.display = open ? 'none' : 'block';
+          edit.textContent = open ? 'Edit access' : 'Close';
+        };
+        cancel.onclick = function () {
+          boxes.forEach(function (b) { b.checked = scope2.indexOf(Number(b.value)) >= 0; });
+          ed.style.display = 'none';
+          edit.textContent = 'Edit access';
+        };
+        save.onclick = function () {
+          var picked = boxes.filter(function (b) { return b.checked; }).map(function (b) { return Number(b.value); });
+          if (!picked.length &&
+              !confirm('No campaigns ticked. ' + u.email + ' will be able to see EVERY campaign of ' +
+                       c.name + ', including ones added later. Continue?')) return;
+          save.disabled = true;
+          setAdminStatus('Saving access for ' + u.email + '…');
+          // can_reply is sent explicitly: this endpoint upserts the whole row, so
+          // omitting it would silently downgrade them to read-only.
+          adminApi('/api/admin/users', {
+            email: u.email, client_id: c.id, can_reply: !!u.can_reply, campaign_ids: picked
+          }).then(function () {
+            setAdminStatus('Access updated for ' + u.email);
+            loadAdmin();
+          }).catch(function (e) { save.disabled = false; admErr(e); });
+        };
+      }
     });
 
     var ar = el('div', 'adm-row');
@@ -1742,30 +1844,67 @@ document.getElementById('sendLink').addEventListener('click', async function () 
       : 'Could not send the email: ' + res.error.message;
     return;
   }
-  msg.className = 'msg info';
-  msg.textContent = 'We emailed a sign-in link to ' + email +
-    '. Open it on this device to sign in. It may take a minute — check spam too.';
-  document.getElementById('codeRow').style.display = 'block';
+  msg.className = 'msg';
+  msg.textContent = '';
+  showSentState(email);
 });
 
-document.getElementById('verifyCode').addEventListener('click', async function () {
-  var email = document.getElementById('loginEmail').value.trim().toLowerCase();
-  var code = document.getElementById('loginCode').value.trim();
+// Cooldown exists because the login mailer is rate limited to a few messages an
+// hour; letting someone hammer Resend would burn the allowance and lock them out.
+var resendTimer = null;
+function showSentState(email) {
+  document.getElementById('loginForm').style.display = 'none';
+  document.getElementById('sentTo').textContent = email;
+  document.getElementById('sentBox').style.display = 'block';
+  var rb = document.getElementById('resendLink');
+  var left = 30;
+  rb.disabled = true;
+  rb.textContent = 'Resend link (' + left + 's)';
+  if (resendTimer) clearInterval(resendTimer);
+  resendTimer = setInterval(function () {
+    left--;
+    if (left <= 0) {
+      clearInterval(resendTimer); resendTimer = null;
+      rb.disabled = false; rb.textContent = 'Resend link';
+    } else {
+      rb.textContent = 'Resend link (' + left + 's)';
+    }
+  }, 1000);
+}
+
+function backToLoginForm() {
+  if (resendTimer) { clearInterval(resendTimer); resendTimer = null; }
+  document.getElementById('sentBox').style.display = 'none';
+  document.getElementById('loginForm').style.display = 'block';
   var msg = document.getElementById('loginMsg');
-  if (!email || !code) { msg.className = 'msg err'; msg.textContent = 'Enter your email and the code.'; return; }
-  msg.className = 'msg info';
-  msg.textContent = 'Verifying…';
-  var res = await sb.auth.verifyOtp({ email: email, token: code, type: 'email' });
-  if (res.error) { msg.className = 'msg err'; msg.textContent = 'Invalid or expired code.'; return; }
-  startApp();
+  msg.className = 'msg'; msg.textContent = '';
+  document.getElementById('loginEmail').focus();
+}
+
+document.getElementById('resendLink').addEventListener('click', function () {
+  var email = document.getElementById('loginEmail').value.trim().toLowerCase();
+  var rb = this;
+  rb.disabled = true;
+  rb.textContent = 'Sending…';
+  sb.auth.signInWithOtp({ email: email, options: { emailRedirectTo: location.origin + location.pathname } })
+    .then(function (res) {
+      var msg = document.getElementById('loginMsg');
+      if (res.error) {
+        backToLoginForm();
+        msg.className = 'msg err';
+        msg.textContent = res.error.message.indexOf('rate') >= 0
+          ? 'Email limit reached — only a few sign-in emails can be sent per hour. Please try again in about an hour.'
+          : 'Could not resend: ' + res.error.message;
+        return;
+      }
+      showSentState(email);
+    });
 });
+
+document.getElementById('useOther').addEventListener('click', backToLoginForm);
 
 document.getElementById('loginEmail').addEventListener('keydown', function (e) {
   if (e.key === 'Enter') document.getElementById('sendLink').click();
-});
-
-document.getElementById('loginCode').addEventListener('keydown', function (e) {
-  if (e.key === 'Enter') document.getElementById('verifyCode').click();
 });
 
 document.getElementById('logout').addEventListener('click', async function () {
