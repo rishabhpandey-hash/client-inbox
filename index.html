@@ -254,6 +254,19 @@
   .composer.open .writing { display: block; }
   section { position: relative; }
   .toolbar { display: flex; gap: 5px; align-items: center; margin-bottom: 8px; max-width: 900px; flex-wrap: wrap; }
+  /* Formatting bar is opt-in via the Aa button. */
+  .toolbar.fmt { display: none; margin: 9px 0 0; }
+  .composer.fmt-on .toolbar.fmt { display: flex; }
+  .fmtbtn { font-weight: 700; }
+  .fmtbtn.on { background: #eef2ff; border-color: #c7d2fe; color: var(--brand); }
+  .cmp-head { display: flex; align-items: center; gap: 9px; padding-bottom: 10px;
+    margin-bottom: 10px; border-bottom: 1px solid var(--line-2); }
+  .cmp-to { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 7px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cmp-tolabel { font-size: 11.5px; color: var(--ink-4); font-weight: 600; }
+  .cmp-toname { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+  .cmp-toaddr { font-size: 12px; color: var(--ink-4); overflow: hidden; text-overflow: ellipsis; }
+  .kbd { font-size: 11px; color: var(--ink-4); }
   .tbtn {
     border: 1px solid #d8dee8; background: var(--surface); border-radius: 7px;
     min-width: 30px; height: 28px; padding: 0 7px; font-size: 12.5px; color: var(--ink-2);
@@ -1069,6 +1082,9 @@ function buildComposer(conv) {
     s.removeAllRanges();
     s.addRange(savedRange);
   }
+  ed.addEventListener('keydown', function (e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); btn.click(); }
+  });
   ed.addEventListener('keyup', saveSel);
   ed.addEventListener('mouseup', saveSel);
   ed.addEventListener('blur', saveSel);
@@ -1090,7 +1106,7 @@ function buildComposer(conv) {
     return b;
   }
 
-  var tb = el('div', 'toolbar');
+  var tb = el('div', 'toolbar fmt');
   tb.appendChild(tbtn('<b>B</b>', 'Bold (Ctrl/Cmd+B)', function () { cmd('bold'); }));
   tb.appendChild(tbtn('<i>I</i>', 'Italic (Ctrl/Cmd+I)', function () { cmd('italic'); }));
   tb.appendChild(tbtn('<u>U</u>', 'Underline (Ctrl/Cmd+U)', function () { cmd('underline'); }));
@@ -1141,15 +1157,12 @@ function buildComposer(conv) {
   tb.appendChild(linkBtn);
   tb.appendChild(tbtn('&#10005; Clear', 'Remove formatting', function () { cmd('removeFormat'); }));
 
-  var right = el('div', 'right');
+  // Cc/Bcc and close belong in the composer header, not in the formatting bar --
+  // that bar is hidden until asked for, so controls buried in it would vanish.
   var ccBtn = el('button', 'cclink', 'Cc / Bcc');
   ccBtn.type = 'button';
-  var expandBtn = el('button', 'tbtn', '⤢');
+  var expandBtn = el('button', 'tbtn', '\u2715');
   expandBtn.type = 'button';
-  expandBtn.title = 'Expand the writing area';
-  right.appendChild(ccBtn);
-  right.appendChild(expandBtn);
-  tb.appendChild(right);
 
   var linkInput = document.createElement('input');
   linkInput.placeholder = 'https://example.com/page';
@@ -1203,11 +1216,14 @@ function buildComposer(conv) {
     ccRow.style.display = open ? 'none' : 'flex';
     if (!open) ccIn.focus();
   };
-  // Closing puts the thread back the way it was.
-  expandBtn.textContent = '\u2715';
+  // Closing used to bin whatever had been typed, with no warning -- easy to lose
+  // a long reply to a stray click. Only an empty draft closes silently.
   expandBtn.title = 'Close without sending';
   expandBtn.onclick = function () {
+    var written = ed.innerText.replace(/\u00a0/g, ' ').trim();
+    if (written && !confirm('Discard this reply? What you have written will be lost.')) return;
     comp.classList.remove('open');
+    comp.classList.remove('fmt-on');
     ed.innerHTML = '';
   };
 
@@ -1219,12 +1235,35 @@ function buildComposer(conv) {
   bar.onclick = openComposer;
   comp.openComposer = openComposer;
 
+  // Recipient stated plainly at the top, the way every mail client does, so it is
+  // never ambiguous who the reply goes to.
+  var head = el('div', 'cmp-head');
+  var to = el('div', 'cmp-to');
+  to.appendChild(el('span', 'cmp-tolabel', 'To'));
+  to.appendChild(el('span', 'cmp-toname', conv.lead_name || conv.lead_email));
+  if (conv.lead_name) to.appendChild(el('span', 'cmp-toaddr', '<' + conv.lead_email + '>'));
+  head.appendChild(to);
+  head.appendChild(ccBtn);
+  head.appendChild(expandBtn);
+
   var sendRow = el('div', 'send-row');
-  var btn = el('button', 'send', 'Send reply');
+  var btn = el('button', 'send', 'Send');
   btn.type = 'button';
+  btn.title = 'Sends from the same mailbox that emailed this lead, in the same thread.';
+  // Formatting is hidden until wanted. Fifteen controls above an empty box was
+  // the single biggest source of clutter in here.
+  var fmtBtn = el('button', 'tbtn fmtbtn', 'Aa');
+  fmtBtn.type = 'button';
+  fmtBtn.title = 'Formatting';
+  fmtBtn.onclick = function () {
+    var on = comp.classList.toggle('fmt-on');
+    fmtBtn.classList.toggle('on', on);
+  };
+  var isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
   var status = el('span', 'sendstate', '');
   sendRow.appendChild(btn);
-  sendRow.appendChild(el('span', 'hint', 'Sends from the same mailbox that emailed this lead, in the same thread.'));
+  sendRow.appendChild(fmtBtn);
+  sendRow.appendChild(el('span', 'kbd', (isMac ? '\u2318' : 'Ctrl') + '\u21B5 to send'));
   sendRow.appendChild(status);
 
   btn.onclick = function () {
@@ -1258,10 +1297,11 @@ function buildComposer(conv) {
     });
   };
 
-  writing.appendChild(tb);
+  writing.appendChild(head);
+  writing.appendChild(ccRow);
   writing.appendChild(ed);
   writing.appendChild(linkRow);
-  writing.appendChild(ccRow);
+  writing.appendChild(tb);
   writing.appendChild(sendRow);
   comp.appendChild(writing);
   return comp;
