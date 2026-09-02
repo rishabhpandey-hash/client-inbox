@@ -33,7 +33,7 @@
            mailbox that ran the campaign. Requires can_reply=true.
       POST {API_BASE}/api/category
            body: { conversation_id, category_id }
-           -> { ok:true, category } — writes the tag through to SmartLead.
+           -> { ok:true, category } — writes the tag through upstream.
     API_BASE is the value of window.INBOX_API_BASE. Admins may append
     &client_id=<uuid> to inbox/thread/drill to view another client.
   - Current page state is mirrored as JSON in <script id="inbox-data">.
@@ -382,7 +382,30 @@
     #search { width: 150px; }
     .whoami { display: none; }
   }
+  /* Touch sizing. The desktop layout is mouse-first -- 18px swatches and 28px
+     toolbar buttons are unusable with a thumb -- so anything tappable grows on
+     small screens. Kept in one place so the desktop look is untouched. */
   @media (max-width: 760px) {
+    .ctl, .btn, .back { min-height: 38px; }
+    #search { flex: 1 1 100%; width: auto; min-width: 0; }
+    .tbtn { min-width: 38px; height: 36px; font-size: 14px; }
+    .swatch { width: 26px !important; height: 26px !important; }
+    .toolbar { gap: 7px; }
+    .tagbox select { min-height: 34px; font-size: 12.5px; }
+    .cclink { min-height: 34px; }
+    .send { min-height: 42px; }
+    .chip { min-height: 34px; display: inline-flex; align-items: center; }
+    /* The header stacked to ~380px of an 812px screen, pushing the list below
+       the fold before anything had loaded. */
+    .brand .sub { display: none; }
+    header { gap: 8px; }
+    .logo { width: 34px; height: 34px; }
+    .brand h1 { font-size: 15px; }
+    /* Reading a conversation on a phone: the stats strip is ~120px of chrome
+       sitting between the header and the messages. Hidden while a thread is
+       open, and it returns on the way back to the list. :has() keeps this
+       CSS-only; a browser without it simply keeps the previous behaviour. */
+    body:has(main.show-thread) #statsBar { display: none !important; }
     aside { width: 100%; }
     main.show-thread aside { display: none; }
     main:not(.show-thread) section { display: none; }
@@ -442,7 +465,7 @@
       <a class="btn" id="liLink" href="https://rishabhpandey-hash.github.io/linkedin-inbox/"
          target="_blank" rel="noopener"
          title="Opens the LinkedIn reply inbox in a new tab. Separate dashboard, same sign-in email."
-         style="text-decoration:none;display:inline-flex;align-items:center;gap:5px">LinkedIn inbox &#8599;</a>
+         style="text-decoration:none;display:none;align-items:center;gap:5px">LinkedIn inbox &#8599;</a>
       <span class="whoami" id="whoami"></span>
       <button class="btn" id="logout">Log out</button>
     </div>
@@ -484,7 +507,7 @@
       </div>
       <div class="admin-col">
         <div class="admin-card">
-          <h3>SmartLead campaigns not on the dashboard</h3>
+          <h3>Campaigns not on the dashboard</h3>
           <div id="admUnmapped"><div class="spinner">Loading&hellip;</div></div>
         </div>
         <div class="admin-card">
@@ -554,6 +577,46 @@ async function api(path, opts) {
     throw e;
   }
   return r.json();
+}
+
+// Upstream errors can carry the vendor's name, a raw endpoint path or an API
+// key fragment. A client must never see any of that, so EVERY error rendered in
+// the UI goes through here. Unrecognised messages are passed through, since they
+// are our own wording.
+// The API answers with machine codes ("reply_not_enabled"). Fine for a log,
+// not for a client reading it in a sidebar.
+var FRIENDLY_ERR = {
+  reply_not_enabled: 'Replying is not enabled for your account.',
+  tagging_not_enabled: 'Tagging is not enabled for your account.',
+  not_authorized: 'This account does not have access to a campaign inbox.',
+  admin_only: 'You do not have access to that.',
+  not_found: 'That conversation is no longer available.',
+  bad_request: 'Something went wrong. Please try again.',
+  bad_json: 'Something went wrong sending that. Please try again.',
+  thread_empty: 'This thread has no messages to reply to yet.',
+  already_mapped: 'That campaign is already on the dashboard.',
+  unauthorized: 'Your session has expired. Please sign in again.',
+  invalid_token: 'Your session has expired. Please sign in again.'
+};
+
+function safeErr(e, fallback) {
+  var raw = String((e && e.body && e.body.error) || (e && e.message) || '').trim();
+  if (!raw) return fallback || 'Something went wrong. Please try again.';
+  if (FRIENDLY_ERR[raw]) return FRIENDLY_ERR[raw];
+  // Matched on SHAPE, not on the vendor's name -- naming it here would put it
+  // back into the page source, which is exactly what we are keeping it out of.
+  // Upstream failures always arrive as "<name> /some/path -> 502: detail".
+  if (/->\s*\d{3}|api_key|\/campaigns\/|\/leads\//i.test(raw)) {
+    var m = raw.match(/->\s*(\d{3})/) || raw.match(/\b([45]\d\d)\b/);
+    return 'The outreach service rejected this request' + (m ? ' (' + m[1] + ')' : '') +
+           '. Please try again in a moment.';
+  }
+  var h = raw.match(/^http\s*(\d{3})$/i);
+  if (h) {
+    if (h[1] === '404') return 'That conversation is no longer available.';
+    return 'Request failed (' + h[1] + '). Please try again.';
+  }
+  return raw;
 }
 
 function el(tag, cls, text) {
@@ -765,7 +828,7 @@ function openDrill(status, title) {
   document.getElementById('drillTitle').textContent = title;
   document.getElementById('drillSub').textContent = camp ? camp.name : 'All campaigns';
   body.innerHTML = '';
-  body.appendChild(el('div', 'spinner', 'Loading from SmartLead…'));
+  body.appendChild(el('div', 'spinner', 'Loading live data…'));
   box.style.display = 'block';
   var path = '/api/drill?status=' + encodeURIComponent(status) +
     (camp ? '&campaign_id=' + encodeURIComponent(camp.id) : '');
@@ -808,12 +871,12 @@ function openDrill(status, title) {
     });
     table.appendChild(tbody);
     body.appendChild(table);
-    var note = 'Live from SmartLead · ' + d.items.length + ' shown';
-    if (d.truncated) note += ' (first 100 per campaign — open the campaign in SmartLead for the full list)';
+    var note = 'Live data · ' + d.items.length + ' shown';
+    if (d.truncated) note += ' (showing the first 100 per campaign)';
     body.appendChild(el('div', 'dnote', note));
   }).catch(function (e) {
     body.innerHTML = '';
-    body.appendChild(el('div', 'spinner', 'Could not load: ' + ((e.body && e.body.error) || e.message)));
+    body.appendChild(el('div', 'spinner', 'Could not load: ' + safeErr(e)));
   });
 }
 
@@ -1167,7 +1230,7 @@ function buildComposer(conv) {
       btn.disabled = false;
       ed.contentEditable = 'true';
       status.className = 'sendstate err';
-      status.textContent = 'Failed: ' + ((e.body && e.body.error) || e.message || 'unknown error');
+      status.textContent = 'Failed: ' + safeErr(e, 'could not send. Please try again.');
     });
   };
 
@@ -1202,7 +1265,7 @@ function renderThread(d) {
   if (canWrite && cats.length) {
     var tagBox = el('div', 'tagbox');
     var tagSel = document.createElement('select');
-    tagSel.title = 'Tag this conversation — also updates SmartLead';
+    tagSel.title = 'Tag this conversation — the tag syncs everywhere';
     var blank = document.createElement('option');
     blank.value = '';
     blank.textContent = 'Not tagged yet — set a tag';
@@ -1231,7 +1294,7 @@ function renderThread(d) {
         tagSel.disabled = false;
         tagSel.className = '';
         tagState.className = 'tagstate ok';
-        tagState.textContent = 'Tagged ✓ (SmartLead updated)';
+        tagState.textContent = 'Tagged ✓ (synced)';
         d.conversation.lead_category = j.category;
         (state.data.conversations || []).forEach(function (cv) {
           if (cv.id === d.conversation.id) cv.lead_category = j.category;
@@ -1244,7 +1307,7 @@ function renderThread(d) {
         tagSel.value = current ? String(current.id) : '';
         d.conversation.lead_category = prev;
         tagState.className = 'tagstate err';
-        tagState.textContent = 'Failed: ' + ((e.body && e.body.error) || 'error');
+        tagState.textContent = 'Failed: ' + safeErr(e, 'could not save the tag.');
       });
     };
     tagBox.appendChild(tagSel);
@@ -1389,6 +1452,9 @@ function load(silent) {
       if (d.campaigns.length > 1) sel.value = 'all';
     }
     document.getElementById('adminBtn').style.display = d.client.is_admin ? '' : 'none';
+    // Internal cross-link only: a client who has no LinkedIn dashboard access
+    // would just hit that app's denied screen, which reads as a broken link.
+    document.getElementById('liLink').style.display = d.client.is_admin ? 'inline-flex' : 'none';
     // The switcher appears for anyone who has more than one client: admins see every
     // client, everyone else sees only the ones they belong to (decided server side).
     var asel = document.getElementById('adminClient');
@@ -1462,7 +1528,7 @@ function setAdminStatus(txt, isErr) {
 }
 
 function admErr(e) {
-  setAdminStatus('Error: ' + ((e.body && e.body.error) || e.message || 'unknown'), true);
+  setAdminStatus('Error: ' + safeErr(e), true);
 }
 
 function openAdmin() {
@@ -1481,7 +1547,7 @@ function closeAdmin() {
 
 function loadAdmin() {
   document.getElementById('admClients').innerHTML = '<div class="spinner">Loading…</div>';
-  document.getElementById('admUnmapped').innerHTML = '<div class="spinner">Checking SmartLead… (a few seconds)</div>';
+  document.getElementById('admUnmapped').innerHTML = '<div class="spinner">Checking for new campaigns… (a few seconds)</div>';
   document.getElementById('admMapped').innerHTML = '';
   api('/api/admin/overview').then(function (d) { adminData = d; renderAdmin(); }).catch(admErr);
 }
@@ -1603,7 +1669,7 @@ function renderAdmin() {
   var un = document.getElementById('admUnmapped');
   un.innerHTML = '';
   if (!adminData.unmapped.length) {
-    un.appendChild(el('div', 'spinner', 'Every SmartLead campaign is already on the dashboard.'));
+    un.appendChild(el('div', 'spinner', 'Every campaign is already on the dashboard.'));
   }
   adminData.unmapped.forEach(function (c) {
     var row = el('div', 'adm-camp');
@@ -1646,7 +1712,7 @@ function renderAdmin() {
     row.appendChild(info);
     var btn = el('button', 'adm-x', 'Unmap');
     btn.onclick = function () {
-      if (!confirm('Remove "' + c.name + '" and its synced conversations from the dashboard? (Nothing changes in SmartLead itself.)')) return;
+      if (!confirm('Remove "' + c.name + '" and its synced conversations from the dashboard? (The campaign itself is not affected.)')) return;
       adminApi('/api/admin/campaigns/unmap', { campaign_id: c.id }).then(loadAdmin).catch(admErr);
     };
     row.appendChild(btn);
